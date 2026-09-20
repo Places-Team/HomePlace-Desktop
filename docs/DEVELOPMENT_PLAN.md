@@ -82,12 +82,17 @@ disappears from the manifest when unavailable or denied.
 
 ## Phase 4 — files and quick send
 
-Current progress: consent-gated small-file receive is implemented with a
-native save dialog, a 5 MiB limit, strict offer validation, streamed SHA-256
-verification and temporary-file commit. File metadata and contents remain in
-Rust. Sending, progress, cancellation and resumable large transfers remain.
+Current progress: consent-gated receive and the first outbound quick-share flow
+are implemented with a native save dialog, a 64 MiB bound, strict offer
+validation, SHA-256 verification and temporary-file commit. The desktop shelf
+accepts a dropped file or pasted text/link and offers only compatible devices.
+Device owners can separately allow explicit household shares; seamless
+clipboard remains account-private. Progress, cancellation and resumable large
+transfers remain.
 
-- Add drag-and-drop and share-to-device flows.
+- Add a macOS Share Extension and a Windows packaged Share Target after stable
+  platform signing is configured. Both must use the same recipient picker and
+  Link permission checks as the in-app shelf.
 - Implement bounded small transfers followed by resumable large transfers.
 - Verify size, checksum, recipient and expiry before saving.
 - Add transfer progress, cancellation, retry and recent history.
@@ -115,6 +120,14 @@ the related action unavailable immediately.
 - Keep the normal operating-system credential or platform biometric as a fallback.
 - Never treat HomePlace approval as a replacement for disk encryption, secure boot or account recovery.
 - Support immediate device revocation and an administrator-visible audit trail.
+
+## Future — biometric local unlock
+
+- Protect credential use with macOS LocalAuthentication/Touch ID and Windows
+  Hello where the operating system supports it.
+- Require a stable signed application identity before migrating Keychain or
+  Credential Manager entries; ad-hoc builds must not repeatedly reset trust.
+- Keep the operating-system password or PIN as the recovery fallback.
 
 ## Phase 6 — handoff and continuity
 

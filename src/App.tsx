@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { FormEvent, useEffect, useState } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { copy, type Language } from "./lib/i18n";
@@ -84,6 +85,22 @@ type ClipboardHistoryEntry = {
   direction: "sent" | "received";
   createdAt: string;
 };
+
+type ShareTarget = {
+  id: string;
+  name: string;
+  platform: string;
+  supportsText: boolean;
+  supportsUrl: boolean;
+  supportsFile: boolean;
+  online: boolean;
+  ownerName: string;
+  ownedByCurrentUser: boolean;
+};
+
+type QuickSharePayload =
+  | { kind: "file"; path: string; label: string }
+  | { kind: "text" | "url"; value: string; label: string };
 
 type Reminder = {
   id: string;
@@ -187,8 +204,6 @@ function visibleCalendarRange(monthOffset: number): { from: string; to: string }
 
 export function App() {
   const [activeSection, setActiveSection] = useState<AppSection>("overview");
-  const [sidebarHovered, setSidebarHovered] = useState(false);
-  const [sidebarFocused, setSidebarFocused] = useState(false);
   const [language, setLanguage] = useState<Language>(() => {
     const saved = window.localStorage.getItem("homeplace-language");
     if (saved === "en" || saved === "ru") return saved;
@@ -236,6 +251,14 @@ export function App() {
   const [clipboardHistory, setClipboardHistory] = useState<ClipboardHistoryEntry[]>([]);
   const [clipboardHistoryError, setClipboardHistoryError] = useState<string | null>(null);
   const [clipboardSyncError, setClipboardSyncError] = useState<string | null>(null);
+  const [shareTargets, setShareTargets] = useState<ShareTarget[]>([]);
+  const [quickShareOpen, setQuickShareOpen] = useState(false);
+  const [quickShareDragging, setQuickShareDragging] = useState(false);
+  const [quickShareText, setQuickShareText] = useState("");
+  const [quickSharePayload, setQuickSharePayload] = useState<QuickSharePayload | null>(null);
+  const [quickShareBusy, setQuickShareBusy] = useState<string | null>(null);
+  const [quickShareError, setQuickShareError] = useState<string | null>(null);
+  const [quickShareSent, setQuickShareSent] = useState(false);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [remindersLoaded, setRemindersLoaded] = useState(true);
   const [reminderBusy, setReminderBusy] = useState(false);
@@ -308,6 +331,47 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem("homeplace-transfer-history", JSON.stringify(transferHistory.slice(0, 50)));
   }, [transferHistory]);
+
+  useEffect(() => {
+    if (state !== "connected" || !activeServerId) return;
+    void invoke<ShareTarget[]>("list_share_targets")
+      .then((targets) => {
+        setShareTargets(targets);
+        setQuickShareError(null);
+      })
+      .catch((reason) => setQuickShareError(errorMessage(reason)));
+  }, [state, activeServerId, lastHeartbeat]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let stopListening: (() => void) | undefined;
+    void getCurrentWebview().onDragDropEvent((event) => {
+      if (cancelled) return;
+      if (event.payload.type === "enter" || event.payload.type === "over") {
+        setQuickShareDragging(true);
+        setQuickShareOpen(true);
+      } else if (event.payload.type === "leave") {
+        setQuickShareDragging(false);
+      } else if (event.payload.type === "drop") {
+        setQuickShareDragging(false);
+        const path = event.payload.paths[0];
+        if (!path) return;
+        const label = path.split(/[\\/]/).pop() || path;
+        setQuickSharePayload({ kind: "file", path, label });
+        setQuickShareText("");
+        setQuickShareSent(false);
+        setQuickShareError(null);
+        setQuickShareOpen(true);
+      }
+    }).then((unlisten) => {
+      if (cancelled) unlisten();
+      else stopListening = unlisten;
+    });
+    return () => {
+      cancelled = true;
+      stopListening?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (activeSection !== "clipboard") return;
@@ -1002,10 +1066,57 @@ export function App() {
     });
   }
 
+  function stageQuickShareText(value: string) {
+    setQuickShareText(value);
+    setQuickShareSent(false);
+    setQuickShareError(null);
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setQuickSharePayload(null);
+      return;
+    }
+    const kind = /^https?:\/\/\S+$/i.test(trimmed) ? "url" : "text";
+    setQuickSharePayload({ kind, value: trimmed, label: trimmed });
+  }
+
+  async function sendQuickShare(target: ShareTarget) {
+    if (!quickSharePayload || quickShareBusy) return;
+    setQuickShareBusy(target.id);
+    setQuickShareError(null);
+    setQuickShareSent(false);
+    try {
+      if (quickSharePayload.kind === "file") {
+        await invoke("send_share_file", {
+          targetDeviceId: target.id,
+          filePath: quickSharePayload.path,
+        });
+      } else {
+        await invoke("send_share_text", {
+          targetDeviceId: target.id,
+          kind: quickSharePayload.kind,
+          value: quickSharePayload.value,
+        });
+      }
+      setQuickSharePayload(null);
+      setQuickShareText("");
+      setQuickShareSent(true);
+    } catch (reason) {
+      setQuickShareError(errorMessage(reason));
+    } finally {
+      setQuickShareBusy(null);
+    }
+  }
+
   const incomingOffer = offers.find((offer) => offer.id !== dismissedOfferId) ?? null;
+  const compatibleShareTargets = (state === "connected" ? shareTargets : []).filter((target) => {
+    if (!quickSharePayload) return true;
+    if (quickSharePayload.kind === "file") return target.supportsFile;
+    if (quickSharePayload.kind === "url") return target.supportsUrl;
+    return target.supportsText;
+  });
 
   return (
-    <main className={`desktop-shell${sidebarHovered || sidebarFocused ? " sidebar-expanded" : ""}`}>
+    <main className="desktop-shell">
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <div
@@ -1017,15 +1128,79 @@ export function App() {
         }}
       />
 
+      <section
+        className={`quick-share-shelf${quickShareOpen ? " open" : ""}${quickShareDragging ? " dragging" : ""}`}
+        onMouseEnter={() => setQuickShareOpen(true)}
+        onMouseLeave={() => {
+          if (!quickSharePayload && !quickShareText && !quickShareBusy) setQuickShareOpen(false);
+        }}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setQuickShareOpen(true);
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          const text = event.dataTransfer.getData("text/plain");
+          if (text) stageQuickShareText(text);
+        }}
+        aria-label={language === "ru" ? "Быстрая отправка" : "Quick share"}
+      >
+        <button
+          type="button"
+          className="quick-share-handle"
+          onClick={() => setQuickShareOpen((open) => !open)}
+          aria-expanded={quickShareOpen}
+        >
+          <Icon name="transfer" size={18} />
+          <span>{language === "ru" ? "Перетащите для отправки" : "Drop to send"}</span>
+        </button>
+        {quickShareOpen && (
+          <div className="quick-share-panel">
+            <div className="quick-share-copy">
+              <b>{language === "ru" ? "Отправить на устройство" : "Send to a device"}</b>
+              <small>{language === "ru" ? "Файл, ссылка или текст — получатель подтвердит получение." : "File, link or text — the recipient approves it first."}</small>
+            </div>
+            {quickSharePayload?.kind === "file" ? (
+              <div className="quick-share-payload">
+                <Icon name="transfer" size={17} />
+                <span><b>{quickSharePayload.label}</b><small>{language === "ru" ? "Файл до 64 МиБ" : "File up to 64 MiB"}</small></span>
+                <button type="button" onClick={() => setQuickSharePayload(null)}>×</button>
+              </div>
+            ) : (
+              <textarea
+                value={quickShareText}
+                maxLength={8000}
+                rows={3}
+                placeholder={language === "ru" ? "Перетащите или вставьте текст и ссылку" : "Drop or paste text and links"}
+                onChange={(event) => stageQuickShareText(event.target.value)}
+              />
+            )}
+            <div className="quick-share-targets">
+              {compatibleShareTargets.map((target) => (
+                <button
+                  type="button"
+                  key={target.id}
+                  disabled={!quickSharePayload || quickShareBusy !== null}
+                  onClick={() => void sendQuickShare(target)}
+                >
+                  <span className={target.online ? "online" : undefined}><Icon name="devices" size={17} /></span>
+                  <span><b>{target.name}</b><small>{target.ownerName} · {target.platform}</small></span>
+                  <em>{quickShareBusy === target.id ? "…" : "→"}</em>
+                </button>
+              ))}
+              {compatibleShareTargets.length === 0 && (
+                <p>{language === "ru" ? "Нет доступных устройств. Старое подключение может потребовать повторной привязки с разрешением share.relay." : "No available devices. An older pairing may need to be paired again with share.relay permission."}</p>
+              )}
+            </div>
+            {quickShareSent && <p className="quick-share-success">{language === "ru" ? "Отправлено — ожидается подтверждение." : "Sent — waiting for approval."}</p>}
+            {quickShareError && <p className="setting-error" role="alert">{quickShareError}</p>}
+          </div>
+        )}
+      </section>
+
       <aside
         className="app-sidebar"
         aria-label="Main navigation"
-        onMouseEnter={() => setSidebarHovered(true)}
-        onMouseLeave={() => setSidebarHovered(false)}
-        onFocusCapture={() => setSidebarFocused(true)}
-        onBlurCapture={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSidebarFocused(false);
-        }}
       >
         <div className="sidebar-brand" data-tauri-drag-region>
           <div className="brand-mark" aria-hidden>

@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::StreamExt;
 use reqwest::{Client, Response, redirect::Policy};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -97,6 +98,25 @@ pub struct ClipboardHistoryEntry {
     text: String,
     direction: String,
     created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareTarget {
+    id: String,
+    name: String,
+    platform: String,
+    supports_text: bool,
+    supports_url: bool,
+    supports_file: bool,
+    online: bool,
+    owner_name: String,
+    owned_by_current_user: bool,
+}
+
+#[derive(Deserialize)]
+struct ShareTargetsEnvelope {
+    targets: Vec<ShareTarget>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -369,7 +389,12 @@ pub async fn start_pairing(
         },
         public_key,
         capabilities: initial_capabilities(),
-        permissions: vec!["calendar.read", "calendar.manage", "reminder.manage"],
+        permissions: vec![
+            "calendar.read",
+            "calendar.manage",
+            "reminder.manage",
+            "share.relay",
+        ],
     };
 
     let base_url = Url::parse(&verified.address)
@@ -810,6 +835,154 @@ pub fn clear_clipboard_history(app: AppHandle) -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(_) => Err("Could not clear clipboard history.".to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn list_share_targets() -> Result<Vec<ShareTarget>, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/mobile/share")
+        .map_err(|_| "Could not create the sharing API address.".to_string())?;
+    let response = http_client()?
+        .get(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    match response.status().as_u16() {
+        401 => {
+            return Err("HomePlace rejected the device credential. Pair this device again.".into());
+        }
+        403 => {
+            return Err(
+                "Sharing was not approved for this device. Pair it again and approve sharing."
+                    .into(),
+            );
+        }
+        _ => ensure_success(&response, "share target list")?,
+    }
+    let envelope: ShareTargetsEnvelope = read_bounded_json(response).await?;
+    if envelope.targets.len() > 100
+        || envelope.targets.iter().any(|target| {
+            !safe_identifier(&target.id)
+                || bounded_device_name(&target.name).is_err()
+                || bounded_device_name(&target.owner_name).is_err()
+                || target.platform.len() > 24
+        })
+    {
+        return Err("HomePlace returned an invalid device list.".into());
+    }
+    Ok(envelope.targets)
+}
+
+#[tauri::command]
+pub async fn send_share_text(
+    target_device_id: String,
+    kind: String,
+    value: String,
+) -> Result<(), String> {
+    if !safe_identifier(&target_device_id) {
+        return Err("The target device is invalid.".into());
+    }
+    let value = match kind.as_str() {
+        "text" => valid_offer_text(&value),
+        "url" => valid_offer_url(&value),
+        _ => None,
+    }
+    .ok_or_else(|| "The shared text or link is invalid.".to_string())?;
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/mobile/share")
+        .map_err(|_| "Could not create the sharing API address.".to_string())?;
+    let response = http_client()?
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .json(&serde_json::json!({
+            "targetDeviceId": target_device_id,
+            "type": kind,
+            "value": value,
+        }))
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    match response.status().as_u16() {
+        401 => Err("HomePlace rejected the device credential. Pair this device again.".into()),
+        403 => Err(
+            "Sharing was not approved for this device. Pair it again and approve sharing.".into(),
+        ),
+        404 => Err("The selected device is no longer available.".into()),
+        _ => ensure_success(&response, "content share"),
+    }
+}
+
+#[tauri::command]
+pub async fn send_share_file(target_device_id: String, file_path: String) -> Result<(), String> {
+    if !safe_identifier(&target_device_id) {
+        return Err("The target device is invalid.".into());
+    }
+    let path = PathBuf::from(file_path);
+    let metadata =
+        fs::metadata(&path).map_err(|_| "The dropped file is no longer available.".to_string())?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_SHARE_FILE_BYTES as u64 {
+        return Err("Choose a file between 1 byte and 64 MiB.".into());
+    }
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| {
+            !name.is_empty() && name.chars().count() <= 240 && !name.chars().any(char::is_control)
+        })
+        .ok_or_else(|| "The dropped filename is invalid.".to_string())?
+        .to_owned();
+    let read_path = path.clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || fs::read(read_path))
+        .await
+        .map_err(|_| "The dropped file could not be read.".to_string())?
+        .map_err(|_| "The dropped file could not be read.".to_string())?;
+    if bytes.len() != metadata.len() as usize {
+        return Err("The dropped file changed while it was being read.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/mobile/share/file")
+        .map_err(|_| "Could not create the file sharing API address.".to_string())?;
+    let response = http_client()?
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/octet-stream")
+        .header("x-homeplace-target", target_device_id)
+        .header(
+            "x-homeplace-filename-base64",
+            STANDARD.encode(filename.as_bytes()),
+        )
+        .bearer_auth(credential.as_str())
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    match response.status().as_u16() {
+        401 => Err("HomePlace rejected the device credential. Pair this device again.".into()),
+        403 => Err(
+            "Sharing was not approved for this device. Pair it again and approve sharing.".into(),
+        ),
+        404 => Err("The selected device is no longer available.".into()),
+        413 => Err("The selected file is larger than 64 MiB.".into()),
+        _ => ensure_success(&response, "file share"),
     }
 }
 
