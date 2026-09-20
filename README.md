@@ -74,6 +74,10 @@ Productivity workspace previews a unified calendar, agenda, reminders, focus
 sessions and cross-device continuation. Implemented capabilities remain
 interactive while future flows are clearly marked as previews.
 
+The interface supports persistent Russian and English language selection. Its
+expandable navigation uses a bundled SVG icon system so controls remain crisp,
+legible and independent of external icon services.
+
 The first functional milestone is pairing with a HomePlace server, storing the
 device credential securely and reporting presence from the system tray.
 

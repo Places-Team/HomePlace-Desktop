@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { FormEvent, useEffect, useState } from "react";
+import { Icon, type IconName } from "./components/Icon";
+import { copy, type Language } from "./lib/i18n";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
 
 type ConnectionState =
@@ -79,21 +81,18 @@ type AppSection =
   | "notifications"
   | "settings";
 
-const steps = ["Server", "Verify", "Approve", "Connected"];
-
 const navigation: Array<{
   id: AppSection;
-  label: string;
-  icon: string;
+  icon: IconName;
 }> = [
-  { id: "overview", label: "Overview", icon: "⌂" },
-  { id: "devices", label: "Devices", icon: "◇" },
-  { id: "clipboard", label: "Clipboard", icon: "▣" },
-  { id: "transfers", label: "Transfers", icon: "⇄" },
-  { id: "automations", label: "Automations", icon: "⌁" },
-  { id: "productivity", label: "Productivity", icon: "□" },
-  { id: "notifications", label: "Notifications", icon: "◌" },
-  { id: "settings", label: "Settings", icon: "⚙" },
+  { id: "overview", icon: "home" },
+  { id: "devices", icon: "devices" },
+  { id: "clipboard", icon: "clipboard" },
+  { id: "transfers", icon: "transfer" },
+  { id: "automations", icon: "automation" },
+  { id: "productivity", icon: "calendar" },
+  { id: "notifications", icon: "bell" },
+  { id: "settings", icon: "settings" },
 ];
 
 function errorMessage(error: unknown): string {
@@ -121,6 +120,11 @@ function serverFromProfile(profile: ConnectionProfile): VerifiedServer {
 
 export function App() {
   const [activeSection, setActiveSection] = useState<AppSection>("overview");
+  const [language, setLanguage] = useState<Language>(() => {
+    const saved = window.localStorage.getItem("homeplace-language");
+    if (saved === "en" || saved === "ru") return saved;
+    return navigator.language.toLowerCase().startsWith("ru") ? "ru" : "en";
+  });
   const [platform, setPlatform] = useState<PlatformInfo>(() =>
     fallbackPlatformInfo(navigator.userAgent),
   );
@@ -192,6 +196,11 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.platform = platform.platform;
   }, [platform.platform]);
+
+  useEffect(() => {
+    window.localStorage.setItem("homeplace-language", language);
+    document.documentElement.lang = language;
+  }, [language]);
 
   useEffect(() => {
     let cancelled = false;
@@ -370,8 +379,9 @@ export function App() {
   const current = progressIndex(state);
   const busy = state === "verifying" || state === "requesting" || profileBusy;
   const isAddingServer = state !== "connected" && profiles.length > 0;
+  const ui = copy[language];
   const today = new Date();
-  const monthLabel = today.toLocaleDateString("en", {
+  const monthLabel = today.toLocaleDateString(language === "ru" ? "ru-RU" : "en-US", {
     month: "long",
     year: "numeric",
   });
@@ -630,8 +640,8 @@ export function App() {
               aria-current={activeSection === item.id ? "page" : undefined}
               onClick={() => setActiveSection(item.id)}
             >
-              <span aria-hidden>{item.icon}</span>
-              <span className="nav-label">{item.label}</span>
+              <Icon name={item.icon} size={22} className="nav-icon" />
+              <span className="nav-label">{ui.nav[item.id]}</span>
               {item.id === "notifications" && notificationFailures > 0 && (
                 <small>{notificationFailures}</small>
               )}
@@ -642,8 +652,8 @@ export function App() {
         <div className="sidebar-status">
           <span className={lastHeartbeat ? "online" : undefined} aria-hidden />
           <div>
-            <b>{server?.serverName ?? "No server"}</b>
-            <small>{lastHeartbeat ? "Connected" : "Waiting for connection"}</small>
+            <b>{server?.serverName ?? ui.noServer}</b>
+            <small>{lastHeartbeat ? ui.connected : ui.waiting}</small>
           </div>
         </div>
       </aside>
@@ -653,9 +663,15 @@ export function App() {
       <header className="titlebar" data-tauri-drag-region>
         <div>
           <p className="eyebrow">HomePlace Link · Desktop</p>
-          <h1>{navigation.find((item) => item.id === activeSection)?.label}</h1>
+          <h1>{ui.nav[activeSection]}</h1>
         </div>
-        <span className="platform-pill">{platform.label}</span>
+        <div className="titlebar-actions">
+          <div className="language-switcher" aria-label={ui.language}>
+            <button type="button" className={language === "ru" ? "active" : undefined} onClick={() => setLanguage("ru")}>RU</button>
+            <button type="button" className={language === "en" ? "active" : undefined} onClick={() => setLanguage("en")}>EN</button>
+          </div>
+          <span className="platform-pill">{platform.label}</span>
+        </div>
       </header>
 
       {activeSection === "devices" && (
@@ -663,12 +679,11 @@ export function App() {
         <div className="hero-copy">
           <p className="eyebrow">
             <span className="status-dot" aria-hidden />
-            Private by design
+            {ui.devices.private}
           </p>
-          <h2>Connect {platform.label} to your HomePlace.</h2>
+          <h2>{ui.devices.connect} {platform.label} {ui.devices.toHomePlace}</h2>
           <p className="lead">
-            Pair with multiple self-hosted servers, switch safely and keep every
-            device identity in {platform.secureStorage}.
+            {ui.devices.lead} {platform.secureStorage}.
           </p>
         </div>
 
@@ -676,16 +691,16 @@ export function App() {
           <section className="profile-switcher" aria-label="Paired servers">
             <div className="profile-heading">
               <div>
-                <p className="eyebrow">Paired servers</p>
-                <strong>{profiles.length} available</strong>
+                  <p className="eyebrow">{ui.devices.paired}</p>
+                  <strong>{profiles.length} {ui.devices.available}</strong>
               </div>
               {isAddingServer ? (
                 <button type="button" onClick={() => void cancelSetup()}>
-                  Cancel setup
+                  {ui.devices.cancelSetup}
                 </button>
               ) : (
                 <button type="button" onClick={beginAddServer} disabled={busy}>
-                  Add server
+                  {ui.devices.addServer}
                 </button>
               )}
             </div>
@@ -714,7 +729,7 @@ export function App() {
         )}
 
         <ol className="progress" aria-label="Connection progress">
-          {steps.map((step, index) => (
+        {ui.devices.steps.map((step, index) => (
             <li className={index <= current ? "active" : ""} key={step}>
               <span>{index + 1}</span>
               {step}
@@ -724,13 +739,13 @@ export function App() {
 
         {!profilesLoaded && (
           <p className="loading-profile" aria-live="polite">
-            Loading secure profiles…
+            {ui.devices.loading}
           </p>
         )}
 
         {profilesLoaded && state !== "connected" && (
           <form className="connect-form" onSubmit={verify}>
-            <label htmlFor="server-address">HomePlace server</label>
+            <label htmlFor="server-address">{ui.devices.server}</label>
             <div className="field-row">
               <input
                 id="server-address"
@@ -749,11 +764,11 @@ export function App() {
                 type="submit"
                 disabled={!address.trim() || busy || state === "pairing"}
               >
-                {state === "verifying" ? "Verifying…" : "Verify server"}
+                {state === "verifying" ? ui.devices.verifying : ui.devices.verify}
               </button>
             </div>
             <p className="hint" id="address-hint">
-              HTTPS is recommended. Local private-network addresses may use HTTP.
+              {ui.devices.addressHint}
             </p>
           </form>
         )}
@@ -764,10 +779,10 @@ export function App() {
             <div className="connection-message">
               <div>
                 <strong>{server.serverName}</strong>
-                <span>Compatible with HomePlace Link v1</span>
+                  <span>{ui.devices.compatible}</span>
               </div>
               {server.reducedSecurity && (
-                <span className="security-badge">Local HTTP</span>
+                  <span className="security-badge">{ui.devices.localHttp}</span>
               )}
             </div>
           )}
@@ -775,7 +790,7 @@ export function App() {
 
         {server && state === "verified" && (
           <form className="pairing-form" onSubmit={requestPairing}>
-            <label htmlFor="device-name">Device name</label>
+              <label htmlFor="device-name">{ui.devices.deviceName}</label>
             <div className="field-row">
               <input
                 id="device-name"
@@ -786,22 +801,22 @@ export function App() {
                 required
               />
               <button type="submit" disabled={!deviceName.trim() || busy}>
-                Request approval
+                {ui.devices.request}
               </button>
             </div>
-            <p className="hint">The private P-256 key never leaves this device.</p>
+            <p className="hint">{ui.devices.keyHint}</p>
           </form>
         )}
 
         {pairing && state === "pairing" && (
           <section className="approval-card" aria-label="Pairing approval">
-            <p className="eyebrow">Confirm in HomePlace</p>
+            <p className="eyebrow">{ui.devices.confirm}</p>
             <strong className="pairing-code">{pairing.code}</strong>
             <p>
-              Open Devices in HomePlace, check this code and approve {deviceName}.
+              {ui.devices.openDevices} {deviceName}.
             </p>
             <span>
-              Waiting securely · expires{" "}
+              {ui.devices.waitingSecurely} · {ui.devices.expires}{" "}
               {new Date(pairing.expiresAt).toLocaleTimeString([], {
                 hour: "2-digit",
                 minute: "2-digit",
@@ -813,45 +828,39 @@ export function App() {
               disabled={profileBusy}
               onClick={() => void cancelPairingRequest()}
             >
-              Cancel request
+              {ui.devices.cancelRequest}
             </button>
           </section>
         )}
 
         {state === "connected" && (
-          <section className="approval-card connected-card" aria-label="Connected">
-            <p className="eyebrow">Connected</p>
+        <section className="approval-card connected-card" aria-label={ui.devices.connected}>
+          <p className="eyebrow">{ui.devices.connected}</p>
             <strong>
-              {deviceName} paired with {server?.serverName}.
+            {deviceName} {ui.devices.pairedWith} {server?.serverName}.
             </strong>
             <p className="server-address">{server?.address}</p>
             <p>
-              The device credential is stored in {platform.secureStorage}.
-              HomePlace stays active in the system tray and reports presence in
-              the background.
+            {ui.devices.credential} {platform.secureStorage}. {ui.devices.background}
             </p>
             {heartbeatError ? (
               <span className="heartbeat-error">{heartbeatError}</span>
             ) : (
               <span>
                 {lastHeartbeat
-                  ? `Online · checked ${lastHeartbeat.toLocaleTimeString([], {
+                  ? `${ui.devices.checked} ${lastHeartbeat.toLocaleTimeString([], {
                       hour: "2-digit",
                       minute: "2-digit",
                     })}`
-                  : "Connecting…"}
+                  : ui.devices.connecting}
                 {deliveredNotifications > 0
-                  ? ` · ${deliveredNotifications} notification${
-                      deliveredNotifications === 1 ? "" : "s"
-                    } delivered`
+                ? ` · ${deliveredNotifications} ${ui.devices.delivered}`
                   : ""}
                 {notificationFailures > 0
-                  ? ` · ${notificationFailures} notification${
-                      notificationFailures === 1 ? "" : "s"
-                    } need attention`
+                ? ` · ${notificationFailures} ${ui.devices.attention}`
                   : ""}
                 {pendingEvents > 0
-                  ? ` · ${pendingEvents} pending event${pendingEvents === 1 ? "" : "s"}`
+                ? ` · ${pendingEvents} ${ui.devices.pending}`
                   : ""}
               </span>
             )}
@@ -859,7 +868,7 @@ export function App() {
             {offers.length > 0 && (
               <section className="pending-offers" aria-label="Pending shares">
                 <div className="offer-heading">
-                  <b>Waiting for approval</b>
+              <b>{ui.devices.waitingApproval}</b>
                   <span>{offers.length}</span>
                 </div>
                 {offers.map((offer) => (
@@ -869,14 +878,14 @@ export function App() {
                     </span>
                     <span className="offer-copy">
                       <b>
-                        {offer.kind === "url"
-                          ? "Open link"
-                          : offer.kind === "file"
-                            ? "Save file"
-                            : "Copy text"}
+                    {offer.kind === "url"
+                      ? ui.devices.open
+                      : offer.kind === "file"
+                        ? ui.devices.save
+                        : ui.devices.copy}
                       </b>
                       <small>
-                        From {offer.sourceName} ·{" "}
+                    {ui.devices.from} {offer.sourceName} ·{" "}
                         {new Date(offer.sentAt).toLocaleTimeString([], {
                           hour: "2-digit",
                           minute: "2-digit",
@@ -897,14 +906,14 @@ export function App() {
                         )
                       }
                     >
-                      {offerBusy === offer.id ? "Working…" : "Accept"}
+                  {offerBusy === offer.id ? ui.devices.working : ui.devices.accept}
                     </button>
                     <button
                       type="button"
                       disabled={offerBusy !== null}
                       onClick={() => void handleOffer(offer, "decline")}
                     >
-                      Decline
+                  {ui.devices.decline}
                     </button>
                   </article>
                 ))}
@@ -922,28 +931,28 @@ export function App() {
                 onClick={() => void reconnectNow()}
                 disabled={reconnecting || profileBusy}
               >
-                {reconnecting ? "Reconnecting…" : "Reconnect now"}
+            {reconnecting ? ui.devices.reconnecting : ui.devices.reconnect}
               </button>
               <button
                 type="button"
                 onClick={() => void disconnect(false)}
                 disabled={profileBusy}
               >
-                Forget locally
+            {ui.devices.forget}
               </button>
               <button
                 type="button"
                 onClick={() => void disconnect(true)}
                 disabled={profileBusy}
               >
-                Disconnect
+            {ui.devices.disconnect}
               </button>
             </div>
 
             <label className="startup-setting">
               <span>
-                <b>Start at login</b>
-                <small>Launch hidden and keep HomePlace available in the tray.</small>
+              <b>{ui.devices.startup}</b>
+              <small>{ui.devices.startupHint}</small>
               </span>
               <input
                 type="checkbox"
@@ -959,10 +968,8 @@ export function App() {
             )}
             <label className="startup-setting">
               <span>
-                <b>Seamless clipboard sync</b>
-                <small>
-                  Automatically sync copied text with your other paired devices. Clipboard contents stay inside your HomePlace account.
-                </small>
+              <b>{ui.devices.clipboard}</b>
+                <small>{ui.devices.clipboardHint}</small>
               </span>
               <input
                 type="checkbox"
@@ -985,45 +992,42 @@ export function App() {
         <section className="section-stack" aria-label="Overview">
           <article className="glass-card welcome-card">
             <div>
-              <p className="eyebrow">Your personal device network</p>
-              <h2>{lastHeartbeat ? "Everything is connected." : "Connect your devices."}</h2>
-              <p className="lead">
-                Move text, files, links and actions between your computers,
-                phones and self-hosted services from one private place.
-              </p>
+              <p className="eyebrow">{ui.overview.eyebrow}</p>
+              <h2>{lastHeartbeat ? ui.overview.connectedTitle : ui.overview.disconnectedTitle}</h2>
+              <p className="lead">{ui.overview.lead}</p>
             </div>
             <button type="button" onClick={() => setActiveSection("devices")}>
-              {profiles.length > 0 ? "Manage devices" : "Connect a server"}
+              {profiles.length > 0 ? ui.overview.manage : ui.overview.connect}
             </button>
           </article>
 
           <section className="metric-grid" aria-label="Connection summary">
             <button type="button" className="glass-card metric-card" onClick={() => setActiveSection("devices")}>
-              <span>◇</span>
+              <span><Icon name="devices" size={21} /></span>
               <strong>{profiles.length}</strong>
-              <small>Paired server{profiles.length === 1 ? "" : "s"}</small>
+              <small>{ui.overview.paired}</small>
             </button>
             <button type="button" className="glass-card metric-card" onClick={() => setActiveSection("transfers")}>
-              <span>⇄</span>
+              <span><Icon name="transfer" size={21} /></span>
               <strong>{pendingEvents}</strong>
-              <small>Pending transfer{pendingEvents === 1 ? "" : "s"}</small>
+              <small>{ui.overview.pending}</small>
             </button>
             <button type="button" className="glass-card metric-card" onClick={() => setActiveSection("notifications")}>
-              <span>◌</span>
+              <span><Icon name="bell" size={21} /></span>
               <strong>{deliveredNotifications}</strong>
-              <small>Notifications delivered</small>
+              <small>{ui.overview.delivered}</small>
             </button>
           </section>
 
           <section className="quick-actions" aria-label="Quick actions">
             <button type="button" onClick={() => setActiveSection("clipboard")}>
-              <span>▣</span><b>Clipboard</b><small>Sync copied text</small>
+              <span><Icon name="clipboard" size={18} /></span><b>{ui.overview.clipboard}</b><small>{ui.overview.sync}</small>
             </button>
             <button type="button" onClick={() => setActiveSection("transfers")}>
-              <span>⇄</span><b>Send a file</b><small>Secure device transfer</small>
+              <span><Icon name="transfer" size={18} /></span><b>{ui.overview.send}</b><small>{ui.overview.transfer}</small>
             </button>
             <button type="button" onClick={() => setActiveSection("automations")}>
-              <span>⌁</span><b>Automation</b><small>Connect apps and actions</small>
+              <span><Icon name="automation" size={18} /></span><b>{ui.overview.automation}</b><small>{ui.overview.actions}</small>
             </button>
           </section>
         </section>
@@ -1032,14 +1036,11 @@ export function App() {
       {activeSection === "clipboard" && (
         <section className="section-stack" aria-label="Clipboard">
           <article className="glass-card feature-hero">
-            <div className="feature-icon">▣</div>
+            <div className="feature-icon"><Icon name="clipboard" size={27} /></div>
             <div>
-              <p className="eyebrow">Seamless text handoff</p>
-              <h2>Copy here. Paste there.</h2>
-              <p className="lead">
-                Newly copied text is relayed to your other paired devices.
-                Existing clipboard contents are never uploaded when you enable it.
-              </p>
+              <p className="eyebrow">{ui.clipboard.eyebrow}</p>
+              <h2>{ui.clipboard.title}</h2>
+              <p className="lead">{ui.clipboard.lead}</p>
             </div>
             <label className="switch-control">
               <input
@@ -1048,14 +1049,14 @@ export function App() {
                 disabled={!clipboardSyncLoaded || clipboardSyncBusy || !activeServerId}
                 onChange={(event) => void updateClipboardSync(event.target.checked)}
               />
-              <span>{clipboardSyncEnabled ? "On" : "Off"}</span>
+              <span>{clipboardSyncEnabled ? ui.clipboard.on : ui.clipboard.off}</span>
             </label>
           </article>
           {clipboardSyncError && <p className="setting-error">{clipboardSyncError}</p>}
           <section className="capability-grid">
-            <article className="glass-card"><b>Text only</b><p>Formatting, whitespace and line breaks are preserved up to 8,000 characters.</p></article>
-            <article className="glass-card"><b>Loop protection</b><p>Content fingerprints stop copied text from bouncing endlessly between devices.</p></article>
-            <article className="glass-card"><b>Private relay</b><p>Only devices paired to the same HomePlace account can receive an update.</p></article>
+            <article className="glass-card"><b>{ui.clipboard.textOnly}</b><p>{ui.clipboard.textHint}</p></article>
+            <article className="glass-card"><b>{ui.clipboard.loop}</b><p>{ui.clipboard.loopHint}</p></article>
+            <article className="glass-card"><b>{ui.clipboard.private}</b><p>{ui.clipboard.privateHint}</p></article>
           </section>
         </section>
       )}
@@ -1063,41 +1064,41 @@ export function App() {
       {activeSection === "transfers" && (
         <section className="section-stack" aria-label="Transfers">
           <article className="glass-card feature-hero compact">
-            <div className="feature-icon">⇄</div>
+            <div className="feature-icon"><Icon name="transfer" size={27} /></div>
             <div>
-              <p className="eyebrow">Cross-device handoff</p>
-              <h2>Transfers</h2>
-              <p className="lead">Receive text, links and verified files without exposing their contents to the interface.</p>
+              <p className="eyebrow">{ui.transfers.eyebrow}</p>
+              <h2>{ui.transfers.title}</h2>
+              <p className="lead">{ui.transfers.lead}</p>
             </div>
           </article>
           <article className="glass-card transfer-list">
-            <div className="section-heading"><div><p className="eyebrow">Inbox</p><h3>Waiting for approval</h3></div><span>{offers.length}</span></div>
+            <div className="section-heading"><div><p className="eyebrow">{ui.transfers.inbox}</p><h3>{ui.transfers.waiting}</h3></div><span>{offers.length}</span></div>
             {offers.length === 0 ? (
-              <div className="empty-state"><span>✓</span><b>Nothing waiting</b><p>Incoming links and files that require your approval will appear here.</p></div>
+              <div className="empty-state"><span><Icon name="check" size={19} /></span><b>{ui.transfers.empty}</b><p>{ui.transfers.emptyHint}</p></div>
             ) : offers.map((offer) => (
               <div className="transfer-row" key={offer.id}>
                 <span>{offer.kind === "url" ? "↗" : offer.kind === "file" ? "↓" : "T"}</span>
-                <div><b>{offer.kind === "url" ? "Open link" : offer.kind === "file" ? "Save file" : "Copy text"}</b><small>From {offer.sourceName}</small></div>
-                <button type="button" disabled={offerBusy !== null} onClick={() => void handleOffer(offer, offer.kind === "url" ? "open" : offer.kind === "file" ? "save" : "copy")}>Accept</button>
-                <button type="button" disabled={offerBusy !== null} onClick={() => void handleOffer(offer, "decline")}>Decline</button>
+                <div><b>{offer.kind === "url" ? ui.transfers.open : offer.kind === "file" ? ui.transfers.save : ui.transfers.copy}</b><small>{ui.transfers.from} {offer.sourceName}</small></div>
+                <button type="button" disabled={offerBusy !== null} onClick={() => void handleOffer(offer, offer.kind === "url" ? "open" : offer.kind === "file" ? "save" : "copy")}>{ui.transfers.accept}</button>
+                <button type="button" disabled={offerBusy !== null} onClick={() => void handleOffer(offer, "decline")}>{ui.transfers.decline}</button>
               </div>
             ))}
           </article>
-          <article className="glass-card planned-action"><span>＋</span><div><b>Send from this computer</b><p>Device picker, drag-and-drop files and link sending are the next transfer milestone.</p></div><small>Coming next</small></article>
+          <article className="glass-card planned-action"><span><Icon name="plus" size={22} /></span><div><b>{ui.transfers.send}</b><p>{ui.transfers.sendHint}</p></div><small>{ui.transfers.next}</small></article>
         </section>
       )}
 
       {activeSection === "automations" && (
         <section className="section-stack" aria-label="Automations">
           <article className="glass-card feature-hero compact">
-            <div className="feature-icon">⌁</div><div><p className="eyebrow">Link rules</p><h2>Automations</h2><p className="lead">Create private flows between devices, Home Assistant and self-hosted services.</p></div><span className="preview-badge">Preview</span>
+            <div className="feature-icon"><Icon name="automation" size={27} /></div><div><p className="eyebrow">{ui.automations.eyebrow}</p><h2>{ui.automations.title}</h2><p className="lead">{ui.automations.lead}</p></div><span className="preview-badge">{ui.automations.preview}</span>
           </article>
           <section className="automation-list">
-            <article className="glass-card automation-row"><span>Android</span><b>Magnet link received</b><i>→</i><span>qBittorrent</span><small>Planned</small></article>
-            <article className="glass-card automation-row"><span>Gaming PC</span><b>Game launched</b><i>→</i><span>Home Assistant scene</span><small>Planned</small></article>
-            <article className="glass-card automation-row"><span>MacBook</span><b>Arrives home</b><i>→</i><span>Wake work PC</span><small>Planned</small></article>
+            <article className="glass-card automation-row"><span>{ui.automations.android}</span><b>{ui.automations.magnet}</b><i>→</i><span>{ui.automations.torrent}</span><small>{ui.automations.planned}</small></article>
+            <article className="glass-card automation-row"><span>{ui.automations.gaming}</span><b>{ui.automations.game}</b><i>→</i><span>{ui.automations.scene}</span><small>{ui.automations.planned}</small></article>
+            <article className="glass-card automation-row"><span>{ui.automations.macbook}</span><b>{ui.automations.home}</b><i>→</i><span>{ui.automations.wake}</span><small>{ui.automations.planned}</small></article>
           </section>
-          <button type="button" className="primary-action" disabled>Create automation</button>
+          <button type="button" className="primary-action" disabled>{ui.automations.create}</button>
         </section>
       )}
 
@@ -1105,31 +1106,31 @@ export function App() {
         <section className="section-stack productivity-page" aria-label="Productivity">
           <article className="glass-card productivity-hero">
             <div>
-              <p className="eyebrow">Your day across every device</p>
-              <h2>One place to plan and continue.</h2>
-              <p className="lead">
-                Calendar, reminders, focus sessions and cross-device handoff
-                will stay in sync through your own HomePlace server.
-              </p>
+              <p className="eyebrow">{ui.productivity.eyebrow}</p>
+              <h2>{ui.productivity.title}</h2>
+              <p className="lead">{ui.productivity.lead}</p>
             </div>
-            <span className="preview-badge">Workspace preview</span>
+            <span className="preview-badge">{ui.productivity.preview}</span>
           </article>
 
           <div className="productivity-layout">
             <article className="glass-card calendar-card">
               <div className="section-heading calendar-heading">
                 <div>
-                  <p className="eyebrow">Calendar</p>
+                  <p className="eyebrow">{ui.productivity.calendar}</p>
                   <h3>{monthLabel}</h3>
                 </div>
                 <div className="calendar-actions" aria-label="Calendar navigation preview">
                   <button type="button" disabled aria-label="Previous month">‹</button>
-                  <button type="button" disabled>Today</button>
+                  <button type="button" disabled>{ui.productivity.today}</button>
                   <button type="button" disabled aria-label="Next month">›</button>
                 </div>
               </div>
               <div className="calendar-weekdays" aria-hidden>
-                {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => <span key={day}>{day}</span>)}
+                {(language === "ru"
+                  ? ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+                  : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+                ).map((day) => <span key={day}>{day}</span>)}
               </div>
               <div className="calendar-grid" aria-label={monthLabel}>
                 {calendarDays.map((day) => (
@@ -1147,61 +1148,61 @@ export function App() {
               <div className="calendar-source-row">
                 <span><i className="source-dot personal" />Personal</span>
                 <span><i className="source-dot home" />HomePlace</span>
-                <small>CalDAV and external calendars planned</small>
+                <small>{ui.productivity.calendarSources}</small>
               </div>
             </article>
 
             <aside className="productivity-side">
               <article className="glass-card agenda-card">
                 <div className="section-heading">
-                  <div><p className="eyebrow">Today</p><h3>Agenda</h3></div>
+                  <div><p className="eyebrow">{ui.productivity.today}</p><h3>{ui.productivity.agenda}</h3></div>
                   <span>{today.getDate()}</span>
                 </div>
                 <div className="agenda-empty">
                   <span>□</span>
-                  <b>Your day is clear</b>
-                  <p>Calendar events will appear after a source is connected.</p>
+                  <b>{ui.productivity.clear}</b>
+                  <p>{ui.productivity.clearHint}</p>
                 </div>
-                <button type="button" className="subtle-action" disabled>＋ Add event</button>
+                <button type="button" className="subtle-action" disabled><Icon name="plus" size={13} /> {ui.productivity.addEvent}</button>
               </article>
 
               <article className="glass-card focus-card">
                 <div>
-                  <p className="eyebrow">Focus</p>
+                  <p className="eyebrow">{ui.productivity.focus}</p>
                   <h3>25:00</h3>
-                  <small>Silence HomePlace notifications on every device.</small>
+                  <small>{ui.productivity.focusHint}</small>
                 </div>
-                <button type="button" disabled>Start</button>
+                <button type="button" disabled>{ui.productivity.start}</button>
               </article>
             </aside>
           </div>
 
           <article className="glass-card reminders-card">
             <div className="section-heading">
-              <div><p className="eyebrow">Reminders</p><h3>Tasks that follow you</h3></div>
-              <button type="button" className="subtle-action" disabled>＋ New reminder</button>
+              <div><p className="eyebrow">{ui.productivity.reminders}</p><h3>{ui.productivity.tasks}</h3></div>
+              <button type="button" className="subtle-action" disabled><Icon name="plus" size={13} /> {ui.productivity.newReminder}</button>
             </div>
             <div className="reminder-grid">
               <div className="reminder-column">
-                <b>Today</b>
-                <div className="reminder-preview"><span />Review HomePlace device alerts<small>Notification on phone and desktop</small></div>
+                <b>{ui.productivity.today}</b>
+                <div className="reminder-preview"><span />{ui.productivity.reviewAlerts}<small>{ui.productivity.reviewAlertsHint}</small></div>
               </div>
               <div className="reminder-column">
-                <b>Upcoming</b>
-                <div className="reminder-preview"><span />Plan weekly server maintenance<small>HomePlace calendar</small></div>
+                <b>{ui.productivity.upcoming}</b>
+                <div className="reminder-preview"><span />{ui.productivity.maintenance}<small>{ui.productivity.maintenanceHint}</small></div>
               </div>
               <div className="reminder-column">
-                <b>Smart lists</b>
-                <div className="smart-list-row"><span>⌂</span>At home <small>0</small></div>
-                <div className="smart-list-row"><span>◇</span>On this device <small>0</small></div>
+                <b>{ui.productivity.smartLists}</b>
+                <div className="smart-list-row"><Icon name="home" size={14} />{ui.productivity.atHome} <small>0</small></div>
+                <div className="smart-list-row"><Icon name="devices" size={14} />{ui.productivity.onDevice} <small>0</small></div>
               </div>
             </div>
           </article>
 
           <section className="productivity-features">
-            <article className="glass-card"><span>↗</span><div><b>Continue on another device</b><p>Open the active document, link or app on a paired computer.</p></div><small>Planned</small></article>
-            <article className="glass-card"><span>⌁</span><div><b>Context automations</b><p>Start Home Assistant scenes when focus or calendar states change.</p></div><small>Planned</small></article>
-            <article className="glass-card"><span>◌</span><div><b>Smart reminders</b><p>Notify the right device based on presence, battery and network.</p></div><small>Planned</small></article>
+            <article className="glass-card"><span><Icon name="link" size={17} /></span><div><b>{ui.productivity.continueTitle}</b><p>{ui.productivity.continueHint}</p></div><small>{ui.productivity.planned}</small></article>
+            <article className="glass-card"><span><Icon name="automation" size={17} /></span><div><b>{ui.productivity.contextTitle}</b><p>{ui.productivity.contextHint}</p></div><small>{ui.productivity.planned}</small></article>
+            <article className="glass-card"><span><Icon name="bell" size={17} /></span><div><b>{ui.productivity.smartTitle}</b><p>{ui.productivity.smartHint}</p></div><small>{ui.productivity.planned}</small></article>
           </section>
         </section>
       )}
@@ -1209,15 +1210,15 @@ export function App() {
       {activeSection === "notifications" && (
         <section className="section-stack" aria-label="Notifications">
           <section className="metric-grid notification-metrics">
-            <article className="glass-card metric-card"><span>✓</span><strong>{deliveredNotifications}</strong><small>Delivered</small></article>
-            <article className="glass-card metric-card"><span>!</span><strong>{notificationFailures}</strong><small>Need attention</small></article>
-            <article className="glass-card metric-card"><span>◌</span><strong>{lastHeartbeat ? "Live" : "—"}</strong><small>Device channel</small></article>
+            <article className="glass-card metric-card"><span><Icon name="check" size={21} /></span><strong>{deliveredNotifications}</strong><small>{ui.notifications.delivered}</small></article>
+            <article className="glass-card metric-card"><span>!</span><strong>{notificationFailures}</strong><small>{ui.notifications.attention}</small></article>
+            <article className="glass-card metric-card"><span><Icon name="bell" size={21} /></span><strong>{lastHeartbeat ? ui.notifications.live : "—"}</strong><small>{ui.notifications.channel}</small></article>
           </section>
           <article className="glass-card settings-panel">
-            <div className="section-heading"><div><p className="eyebrow">Delivery</p><h3>Notification routes</h3></div></div>
-            <div className="settings-row"><span><b>Desktop notifications</b><small>Show HomePlace events through the native notification centre.</small></span><em>Enabled</em></div>
-            <div className="settings-row"><span><b>Telegram health alerts</b><small>HomePlace monitors configured bots and reports availability failures.</small></span><em>Managed on server</em></div>
-            <div className="settings-row"><span><b>Mobile approval requests</b><small>Approve sensitive desktop actions from your paired phone.</small></span><em>Planned</em></div>
+            <div className="section-heading"><div><p className="eyebrow">{ui.notifications.delivery}</p><h3>{ui.notifications.routes}</h3></div></div>
+            <div className="settings-row"><span><b>{ui.notifications.desktop}</b><small>{ui.notifications.desktopHint}</small></span><em>{ui.notifications.enabled}</em></div>
+            <div className="settings-row"><span><b>{ui.notifications.telegram}</b><small>{ui.notifications.telegramHint}</small></span><em>{ui.notifications.server}</em></div>
+            <div className="settings-row"><span><b>{ui.notifications.mobile}</b><small>{ui.notifications.mobileHint}</small></span><em>{ui.notifications.planned}</em></div>
           </article>
         </section>
       )}
@@ -1225,20 +1226,20 @@ export function App() {
       {activeSection === "settings" && (
         <section className="section-stack" aria-label="Settings">
           <article className="glass-card settings-panel">
-            <div className="section-heading"><div><p className="eyebrow">Application</p><h3>General</h3></div></div>
-            <label className="settings-row"><span><b>Start at login</b><small>Launch hidden and keep HomePlace available in the system tray.</small></span><input type="checkbox" checked={startupEnabled} disabled={!startupLoaded || startupBusy} onChange={(event) => void updateStartup(event.target.checked)} /></label>
-            <label className="settings-row"><span><b>Seamless clipboard sync</b><small>Automatically relay newly copied text between paired devices.</small></span><input type="checkbox" checked={clipboardSyncEnabled} disabled={!clipboardSyncLoaded || clipboardSyncBusy || !activeServerId} onChange={(event) => void updateClipboardSync(event.target.checked)} /></label>
+            <div className="section-heading"><div><p className="eyebrow">{ui.settings.application}</p><h3>{ui.settings.general}</h3></div></div>
+            <label className="settings-row"><span><b>{ui.settings.startup}</b><small>{ui.settings.startupHint}</small></span><input type="checkbox" checked={startupEnabled} disabled={!startupLoaded || startupBusy} onChange={(event) => void updateStartup(event.target.checked)} /></label>
+            <label className="settings-row"><span><b>{ui.settings.clipboard}</b><small>{ui.settings.clipboardHint}</small></span><input type="checkbox" checked={clipboardSyncEnabled} disabled={!clipboardSyncLoaded || clipboardSyncBusy || !activeServerId} onChange={(event) => void updateClipboardSync(event.target.checked)} /></label>
             {(startupError || clipboardSyncError) && <p className="setting-error">{startupError ?? clipboardSyncError}</p>}
           </article>
           <article className="glass-card settings-panel">
-            <div className="section-heading"><div><p className="eyebrow">Connection</p><h3>{server?.serverName ?? "HomePlace server"}</h3></div><span className={lastHeartbeat ? "status-chip online" : "status-chip"}>{lastHeartbeat ? "Online" : "Offline"}</span></div>
-            <div className="settings-row static"><span><b>Server address</b><small>{server?.address ?? "No server paired"}</small></span></div>
-            <div className="settings-row static"><span><b>Credential storage</b><small>{platform.secureStorage} · separate identity for every server</small></span></div>
-            <div className="settings-actions"><button type="button" onClick={() => void reconnectNow()} disabled={!activeServerId || reconnecting}>Reconnect</button><button type="button" onClick={() => setActiveSection("devices")}>Manage servers</button></div>
+            <div className="section-heading"><div><p className="eyebrow">{ui.settings.connection}</p><h3>{server?.serverName ?? ui.settings.server}</h3></div><span className={lastHeartbeat ? "status-chip online" : "status-chip"}>{lastHeartbeat ? ui.settings.online : ui.settings.offline}</span></div>
+            <div className="settings-row static"><span><b>{ui.settings.address}</b><small>{server?.address ?? ui.settings.notPaired}</small></span></div>
+            <div className="settings-row static"><span><b>{ui.settings.storage}</b><small>{platform.secureStorage} · {ui.settings.storageHint}</small></span></div>
+            <div className="settings-actions"><button type="button" onClick={() => void reconnectNow()} disabled={!activeServerId || reconnecting}>{ui.settings.reconnect}</button><button type="button" onClick={() => setActiveSection("devices")}>{ui.settings.manage}</button></div>
           </article>
           <article className="glass-card settings-panel muted-panel">
-            <div className="section-heading"><div><p className="eyebrow">About</p><h3>HomePlace Link Desktop</h3></div><span>v0.1.0</span></div>
-            <p>Protocol v1 · Platform-native companion for {platform.label}</p>
+            <div className="section-heading"><div><p className="eyebrow">{ui.settings.about}</p><h3>HomePlace Link Desktop</h3></div><span>v0.1.0</span></div>
+            <p>Protocol v1 · {ui.settings.companion} {platform.label}</p>
           </article>
         </section>
       )}
@@ -1246,34 +1247,31 @@ export function App() {
       {activeSection === "overview" && (
       <section className="details-grid">
         <article className="glass-card detail-card">
-          <div className="detail-icon">◇</div>
+          <div className="detail-icon"><Icon name="devices" size={22} /></div>
           <div>
-            <h3>Platform-native</h3>
+            <h3>{ui.details.platform}</h3>
             <p>
               {platform.platform === "macos"
-                ? "Menu bar presence and glass materials designed for macOS."
+                ? ui.details.mac
                 : platform.platform === "windows"
-                  ? "Notification-area presence and Fluent-compatible surfaces."
-                  : "Desktop-neutral tray controls with compositor-aware styling."}
+                  ? ui.details.windows
+                  : ui.details.linux}
             </p>
           </div>
         </article>
         <article className="glass-card detail-card">
-          <div className="detail-icon">⌁</div>
+          <div className="detail-icon"><Icon name="link" size={22} /></div>
           <div>
-            <h3>Separate trust per server</h3>
-            <p>
-              Every HomePlace keeps its own key, credential and device identity
-              in {platform.secureStorage}.
-            </p>
+            <h3>{ui.details.trust}</h3>
+            <p>{ui.details.trustHint}</p>
           </div>
         </article>
       </section>
       )}
 
       <footer>
-        <span>HomePlace Link protocol v1</span>
-        <span>Secrets stay in platform secure storage</span>
+        <span>{ui.details.protocol}</span>
+        <span>{ui.details.secrets}</span>
       </footer>
       </div>
     </main>
