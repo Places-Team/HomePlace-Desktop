@@ -3,9 +3,13 @@ mod platform;
 mod startup;
 mod tray;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use platform::PlatformInfo;
 use serde::Serialize;
 use tauri::Manager;
+
+static QUICK_SHARE_WAS_FOCUSED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,10 +75,15 @@ pub fn run() {
         .on_window_event(|window, event| {
             if window.label() == "quick-share" {
                 match event {
-                    tauri::WindowEvent::Focused(false) => {
-                        let _ = window.hide();
+                    tauri::WindowEvent::Focused(focused) => {
+                        if *focused {
+                            QUICK_SHARE_WAS_FOCUSED.store(true, Ordering::Relaxed);
+                        } else if QUICK_SHARE_WAS_FOCUSED.swap(false, Ordering::Relaxed) {
+                            let _ = window.hide();
+                        }
                     }
                     tauri::WindowEvent::CloseRequested { api, .. } => {
+                        QUICK_SHARE_WAS_FOCUSED.store(false, Ordering::Relaxed);
                         api.prevent_close();
                         let _ = window.hide();
                     }
