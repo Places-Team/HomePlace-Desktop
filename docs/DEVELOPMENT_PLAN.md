@@ -52,6 +52,10 @@ HTTPS installations, restart and reconnect without exposing credentials.
 Exit criteria: presence remains accurate across sleep, wake, network changes,
 logout and server restart.
 
+Current progress: the cross-platform tray, close-to-background lifecycle and
+native heartbeat scheduler are implemented. Platform-specific tray polish,
+sleep/wake integration and realtime transport remain.
+
 ## Phase 3 — notifications, URLs and clipboard
 
 - Receive native notifications with safe action routing. Basic validated

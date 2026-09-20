@@ -46,8 +46,10 @@ and reports authenticated presence to HomePlace. Heartbeats use bounded
 reconnect backoff, resume immediately when the computer returns online and
 securely deliver validated HomePlace events as native notifications. Events are
 acknowledged only after local delivery. Revocation, secure local forgetting and
-credential cleanup are also supported. Multiple server profiles and tray
-integration are the next milestones.
+credential cleanup are also supported. The native tray keeps Link active after
+the window closes, and the Rust heartbeat service continues independently of
+the interface. Multiple server profiles and realtime transport are the next
+milestones.
 
 The first functional milestone is pairing with a HomePlace server, storing the
 device credential securely and reporting presence from the system tray.

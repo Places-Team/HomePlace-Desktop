@@ -1,8 +1,10 @@
 mod link;
 mod platform;
+mod tray;
 
 use platform::PlatformInfo;
 use serde::Serialize;
+use tauri::Manager;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,13 +30,33 @@ fn platform_info() -> BootstrapInfo {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            // Some Linux desktop environments do not provide a tray host. In
+            // that case HomePlace keeps its normal close behaviour.
+            let _ = tray::install(app);
+            let heartbeat = link::client::start_heartbeat_service(app.handle().clone());
+            app.manage(heartbeat);
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && window.app_handle().tray_by_id(tray::TRAY_ID).is_some()
+            {
+                api.prevent_close();
+                let _ = window.hide();
+                tray::notify_window_hidden(window.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             platform_info,
             link::client::verify_server,
             link::client::start_pairing,
             link::client::poll_pairing,
             link::client::connection_profile,
-            link::client::send_heartbeat,
+            link::client::request_heartbeat,
             link::client::disconnect_device
         ])
         .run(tauri::generate_context!())

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { FormEvent, useEffect, useState } from "react";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
 
@@ -37,12 +38,15 @@ type ConnectionProfile = {
   deviceName: string;
 };
 
-type HeartbeatStatus = {
-  serverTime: string;
-  pendingEvents: number;
-  deliveredNotifications: number;
-  notificationFailures: number;
-};
+type HeartbeatUpdate =
+  | {
+      status: "connected";
+      serverTime: string;
+      pendingEvents: number;
+      deliveredNotifications: number;
+      notificationFailures: number;
+    }
+  | { status: "failed"; message: string };
 
 const steps = ["Server", "Verify", "Approve", "Connected"];
 
@@ -144,50 +148,40 @@ export function App() {
   useEffect(() => {
     if (state !== "connected") return;
     let cancelled = false;
-    let running = false;
-    let retryCount = 0;
-    let timer: number | undefined;
-
-    function schedule(delay: number) {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => void heartbeat(), delay);
-    }
-
-    async function heartbeat() {
-      if (cancelled || running) return;
-      running = true;
-      try {
-        const result = await invoke<HeartbeatStatus>("send_heartbeat");
-        if (cancelled) return;
-        setLastHeartbeat(new Date(result.serverTime));
-        setPendingEvents(result.pendingEvents);
-        setDeliveredNotifications(result.deliveredNotifications);
-        setNotificationFailures(result.notificationFailures);
-        setHeartbeatError(null);
-        retryCount = 0;
-        schedule(30_000);
-      } catch (reason) {
-        if (cancelled) return;
-        setHeartbeatError(errorMessage(reason));
-        retryCount += 1;
-        schedule(Math.min(30_000 * 2 ** (retryCount - 1), 300_000));
-      } finally {
-        running = false;
-      }
-    }
+    let stopListening: (() => void) | undefined;
 
     function wake() {
       if (document.visibilityState === "hidden") return;
-      window.clearTimeout(timer);
-      void heartbeat();
+      void invoke("request_heartbeat");
     }
 
-    void heartbeat();
+    void listen<HeartbeatUpdate>("link-heartbeat", ({ payload }) => {
+      if (cancelled) return;
+      if (payload.status === "failed") {
+        setHeartbeatError(payload.message);
+        return;
+      }
+      setLastHeartbeat(new Date(payload.serverTime));
+      setPendingEvents(payload.pendingEvents);
+      setDeliveredNotifications(payload.deliveredNotifications);
+      setNotificationFailures(payload.notificationFailures);
+      setHeartbeatError(null);
+    }).then((unlisten) => {
+      if (cancelled) {
+        unlisten();
+        return;
+      }
+      stopListening = unlisten;
+      void invoke("request_heartbeat");
+    }).catch((reason) => {
+      if (!cancelled) setHeartbeatError(errorMessage(reason));
+    });
+
     window.addEventListener("online", wake);
     document.addEventListener("visibilitychange", wake);
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
+      stopListening?.();
       window.removeEventListener("online", wake);
       document.removeEventListener("visibilitychange", wake);
     };
@@ -364,7 +358,7 @@ export function App() {
           <section className="approval-card connected-card" aria-label="Connected">
             <p className="eyebrow">Connected</p>
             <strong>{deviceName} is paired with {server?.serverName}.</strong>
-            <p>The device credential is stored in {platform.secureStorage} and presence is reported every 30 seconds.</p>
+            <p>The device credential is stored in {platform.secureStorage}. HomePlace stays active in the system tray and reports presence in the background.</p>
             {heartbeatError ? (
               <span className="heartbeat-error">{heartbeatError}</span>
             ) : (

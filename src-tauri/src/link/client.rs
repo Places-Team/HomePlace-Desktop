@@ -3,8 +3,10 @@ use std::{collections::HashSet, time::Duration};
 use futures_util::StreamExt;
 use reqwest::{Client, Response, redirect::Policy};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_notification::NotificationExt;
 use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
+use tokio::{sync::mpsc, time::sleep};
 use url::{Host, Url};
 use zeroize::Zeroizing;
 
@@ -16,6 +18,19 @@ use super::{
 use crate::platform;
 
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+const HEARTBEAT_EVENT: &str = "link-heartbeat";
+const HEALTHY_HEARTBEAT_SECONDS: u64 = 30;
+const MAX_RETRY_SECONDS: u64 = 5 * 60;
+
+pub struct HeartbeatService {
+    wake: mpsc::Sender<()>,
+}
+
+impl HeartbeatService {
+    fn wake(&self) {
+        let _ = self.wake.try_send(());
+    }
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +64,20 @@ pub struct HeartbeatStatus {
     pending_events: usize,
     delivered_notifications: usize,
     notification_failures: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+enum HeartbeatUpdate {
+    Connected {
+        server_time: String,
+        pending_events: usize,
+        delivered_notifications: usize,
+        notification_failures: usize,
+    },
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -359,8 +388,7 @@ pub fn connection_profile() -> Result<Option<StoredProfile>, String> {
     Ok(Some(profile))
 }
 
-#[tauri::command]
-pub async fn send_heartbeat(app: tauri::AppHandle) -> Result<HeartbeatStatus, String> {
+async fn send_heartbeat(app: &AppHandle) -> Result<HeartbeatStatus, String> {
     let profile = identity::load_profile()?
         .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
     validate_stored_profile(&profile)?;
@@ -389,6 +417,84 @@ pub async fn send_heartbeat(app: tauri::AppHandle) -> Result<HeartbeatStatus, St
         delivered_notifications,
         notification_failures,
     })
+}
+
+pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
+    let (wake, mut wake_requests) = mpsc::channel(1);
+    tauri::async_runtime::spawn(async move {
+        let mut failures = 0_u32;
+
+        while wake_requests.recv().await.is_some() {
+            loop {
+                if identity::load_profile().ok().flatten().is_none() {
+                    crate::tray::set_connection_state(
+                        &app,
+                        crate::tray::ConnectionState::NotConfigured,
+                    );
+                    break;
+                }
+
+                let result = send_heartbeat(&app).await;
+                let delay = match result {
+                    Ok(status) => {
+                        failures = 0;
+                        crate::tray::set_connection_state(
+                            &app,
+                            crate::tray::ConnectionState::Connected,
+                        );
+                        let _ = app.emit(
+                            HEARTBEAT_EVENT,
+                            HeartbeatUpdate::Connected {
+                                server_time: status.server_time,
+                                pending_events: status.pending_events,
+                                delivered_notifications: status.delivered_notifications,
+                                notification_failures: status.notification_failures,
+                            },
+                        );
+                        Duration::from_secs(HEALTHY_HEARTBEAT_SECONDS)
+                    }
+                    Err(message) => {
+                        failures = failures.saturating_add(1);
+                        crate::tray::set_connection_state(
+                            &app,
+                            crate::tray::ConnectionState::Interrupted,
+                        );
+                        let _ = app.emit(HEARTBEAT_EVENT, HeartbeatUpdate::Failed { message });
+                        heartbeat_retry_delay(failures)
+                    }
+                };
+
+                tokio::select! {
+                    _ = sleep(delay) => {}
+                    request = wake_requests.recv() => {
+                        if request.is_none() {
+                            return;
+                        }
+                        failures = 0;
+                    }
+                }
+
+                if identity::load_profile().ok().flatten().is_none() {
+                    break;
+                }
+            }
+        }
+    });
+    HeartbeatService { wake }
+}
+
+#[tauri::command]
+pub fn request_heartbeat(service: State<'_, HeartbeatService>) {
+    service.wake();
+}
+
+fn heartbeat_retry_delay(failures: u32) -> Duration {
+    let exponent = failures.saturating_sub(1).min(4);
+    Duration::from_secs(
+        HEALTHY_HEARTBEAT_SECONDS
+            .saturating_mul(1_u64 << exponent)
+            .min(MAX_RETRY_SECONDS),
+    )
 }
 
 async fn heartbeat_request(
@@ -470,7 +576,10 @@ fn bounded_notification_text(value: &str, maximum: usize) -> Result<String, ()> 
 }
 
 #[tauri::command]
-pub async fn disconnect_device(revoke: bool) -> Result<(), String> {
+pub async fn disconnect_device(
+    revoke: bool,
+    service: State<'_, HeartbeatService>,
+) -> Result<(), String> {
     let profile = identity::load_profile()?
         .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
     validate_stored_profile(&profile)?;
@@ -492,7 +601,9 @@ pub async fn disconnect_device(revoke: bool) -> Result<(), String> {
         }
     }
 
-    identity::delete_profile(&profile.server_id)
+    identity::delete_profile(&profile.server_id)?;
+    service.wake();
+    Ok(())
 }
 
 fn http_client() -> Result<Client, String> {
@@ -854,6 +965,16 @@ mod tests {
         assert!(acknowledged.is_empty());
         assert_eq!(delivered, 0);
         assert_eq!(failures, 1);
+    }
+
+    #[test]
+    fn bounds_heartbeat_retry_backoff() {
+        assert_eq!(heartbeat_retry_delay(1), Duration::from_secs(30));
+        assert_eq!(heartbeat_retry_delay(2), Duration::from_secs(60));
+        assert_eq!(heartbeat_retry_delay(3), Duration::from_secs(120));
+        assert_eq!(heartbeat_retry_delay(4), Duration::from_secs(240));
+        assert_eq!(heartbeat_retry_delay(5), Duration::from_secs(300));
+        assert_eq!(heartbeat_retry_delay(u32::MAX), Duration::from_secs(300));
     }
 
     fn notification_event(payload: serde_json::Value) -> HeartbeatEvent {
