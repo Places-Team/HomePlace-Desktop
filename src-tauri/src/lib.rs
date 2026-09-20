@@ -27,7 +27,10 @@ fn platform_info() -> BootstrapInfo {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![platform_info])
+        .invoke_handler(tauri::generate_handler![
+            platform_info,
+            link::client::verify_server
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run HomePlace Desktop");
 }

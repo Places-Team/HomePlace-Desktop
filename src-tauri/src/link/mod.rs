@@ -1,4 +1,5 @@
 pub mod capabilities;
+pub mod client;
 #[allow(dead_code)]
 pub mod protocol;
 

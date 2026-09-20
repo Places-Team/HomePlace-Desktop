@@ -22,6 +22,9 @@ application opens a platform-specific shell without network access.
 
 ## Phase 1 — server profiles and secure pairing
 
+Current progress: live server discovery and verification are implemented.
+Cryptographic device identity, approval and credential persistence remain.
+
 - Accept HTTPS domains, local hostnames, IPv4, IPv6 and HomePlace QR payloads.
 - Validate `/api/link/info`, server ID, protocol range, clock skew and TLS
   identity.
@@ -133,4 +136,3 @@ macOS is the first polished visual target because it defines the glass design
 and menu bar experience. Windows and Linux remain buildable from Phase 0 and
 receive functional parity milestone by milestone. A visual lead on macOS does
 not permit protocol or security drift between platforms.
-
