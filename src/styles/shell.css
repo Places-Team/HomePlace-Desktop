@@ -9,6 +9,15 @@
   transition: grid-template-columns 180ms ease;
 }
 
+.window-drag-region {
+  position: fixed;
+  z-index: 10;
+  top: 0;
+  right: 0;
+  left: 76px;
+  height: 38px;
+}
+
 .app-sidebar {
   position: sticky;
   top: 42px;
@@ -53,9 +62,11 @@
 }
 .sidebar-nav { display: grid; gap: 3px; margin-top: 10px; }
 .sidebar-nav button {
+  position: relative;
   display: grid;
-  grid-template-columns: 34px 0fr auto;
+  grid-template-columns: 1fr;
   align-items: center;
+  justify-items: center;
   width: 100%;
   border: 1px solid transparent;
   border-radius: 11px;
@@ -71,9 +82,10 @@
 .app-sidebar:hover .sidebar-nav button,
 .app-sidebar:focus-within .sidebar-nav button {
   grid-template-columns: 34px minmax(0, 1fr) auto;
+  justify-items: stretch;
   padding-inline: 10px;
 }
-.sidebar-nav .nav-icon { color: rgba(197, 210, 255, 0.76); filter: drop-shadow(0 0 7px rgba(138, 168, 255, 0.12)); }
+.sidebar-nav .nav-icon { justify-self: center; color: rgba(197, 210, 255, 0.76); filter: drop-shadow(0 0 7px rgba(138, 168, 255, 0.12)); }
 .sidebar-nav button.active .nav-icon { color: #cbd7ff; filter: drop-shadow(0 0 8px rgba(138, 168, 255, 0.34)); }
 .sidebar-nav .nav-label {
   min-width: 0;
@@ -91,12 +103,14 @@
   color: #fff;
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.08);
 }
-.sidebar-nav button small { display: grid; min-width: 7px; width: 7px; height: 7px; place-items: center; overflow: hidden; border-radius: 999px; background: #ff7f89; color: transparent; font-size: 0; }
+.sidebar-nav button small { position: absolute; top: 5px; right: 4px; display: grid; min-width: 16px; height: 16px; place-items: center; border: 1px solid rgba(255, 151, 161, 0.34); border-radius: 6px; background: rgba(255, 127, 137, 0.16); padding: 0 3px; color: #ffc2c8; font-size: 8px; font-weight: 750; box-shadow: 0 3px 10px rgba(255, 86, 101, 0.12); }
 .app-sidebar:hover .sidebar-nav button small,
-.app-sidebar:focus-within .sidebar-nav button small { min-width: 18px; width: auto; height: 18px; color: #ffc2c8; background: rgba(255, 127, 137, 0.18); font-size: 9px; }
+.app-sidebar:focus-within .sidebar-nav button small { position: static; min-width: 20px; height: 20px; justify-self: end; font-size: 9px; }
 .sidebar-status { display: flex; align-items: center; gap: 9px; margin-top: auto; border-top: 1px solid rgba(255, 255, 255, 0.08); padding: 14px 20px 4px; }
-.sidebar-status > span { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: rgba(235, 239, 248, 0.28); }
-.sidebar-status > span.online { background: #7ed5a8; box-shadow: 0 0 10px rgba(126, 213, 168, 0.65); }
+.sidebar-status > span { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border: 1px solid rgba(235, 239, 248, 0.14); border-radius: 7px; background: rgba(235, 239, 248, 0.06); color: rgba(235, 239, 248, 0.42); font-size: 0; }
+.sidebar-status > span::before { content: "–"; font-size: 11px; font-weight: 750; }
+.sidebar-status > span.online { border-color: rgba(126, 213, 168, 0.28); background: rgba(126, 213, 168, 0.1); color: #9ae4bc; box-shadow: 0 6px 18px rgba(47, 122, 83, 0.16); }
+.sidebar-status > span.online::before { content: "✓"; }
 .sidebar-status div { display: grid; min-width: 130px; gap: 2px; opacity: 0; transition: opacity 120ms ease; }
 .app-sidebar:hover .sidebar-status div,
 .app-sidebar:focus-within .sidebar-status div { opacity: 1; }
@@ -104,6 +118,30 @@
 .sidebar-status b { font-size: 10px; }
 .sidebar-status small { color: var(--muted); font-size: 8px; }
 .app-content { min-width: 0; padding: 12px 16px 14px 0; }
+
+.incoming-offer-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 7, 12, 0.48);
+  padding: 24px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+.incoming-offer-card { position: relative; display: grid; width: min(460px, 100%); grid-template-columns: 52px minmax(0, 1fr); gap: 15px; border-radius: 22px; padding: 24px; }
+.incoming-offer-card h2 { margin: 3px 0 7px; font-size: 21px; }
+.incoming-offer-icon { display: grid; width: 48px; height: 48px; place-items: center; border: 1px solid rgba(138, 168, 255, 0.24); border-radius: 15px; background: rgba(138, 168, 255, 0.12); color: var(--accent-strong); font-size: 20px; }
+.incoming-offer-close { position: absolute; top: 12px; right: 12px; display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 9px; background: rgba(255, 255, 255, 0.05); color: var(--muted); font-size: 18px; }
+.incoming-offer-source { margin: 0; color: var(--muted); font-size: 11px; }
+.incoming-offer-file { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 13px 0 0; border: 1px solid var(--line); border-radius: 11px; background: rgba(0, 0, 0, 0.16); padding: 10px 12px; }
+.incoming-offer-file b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.incoming-offer-file small { flex: 0 0 auto; color: var(--muted); font-size: 9px; }
+.incoming-offer-actions { display: flex; grid-column: 1 / -1; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.incoming-offer-actions button { border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, 0.05); padding: 9px 13px; color: var(--muted); font-size: 10px; }
+.incoming-offer-actions .primary-action { color: #11182c; background: linear-gradient(180deg, #a7bbff, #7895ed); }
+.incoming-offer-card > .setting-error { grid-column: 1 / -1; margin: 0; }
 
 @media (min-width: 761px) {
   .desktop-shell.sidebar-expanded {
@@ -172,6 +210,16 @@ button.metric-card:hover { border-color: rgba(138, 168, 255, 0.32); transform: t
 .transfer-row b { font-size: 10px; }
 .transfer-row small { color: var(--muted); font-size: 8px; }
 .transfer-row button, .settings-actions button { border: 1px solid var(--line); border-radius: 9px; background: rgba(255, 255, 255, 0.045); padding: 7px 10px; color: var(--muted); font-size: 9px; }
+.transfer-history .section-heading > button { border: 1px solid var(--line); border-radius: 9px; background: rgba(255, 255, 255, 0.04); padding: 7px 10px; color: var(--muted); font-size: 9px; }
+.transfer-history .transfer-row { grid-template-columns: 32px minmax(0, 1fr) auto; }
+.transfer-history .transfer-row em { border-radius: 999px; background: rgba(126, 213, 168, 0.09); padding: 5px 8px; color: #a9e9c7; font-size: 8px; font-style: normal; }
+.clipboard-history .section-heading > button { border: 1px solid var(--line); border-radius: 9px; background: rgba(255, 255, 255, 0.04); padding: 7px 10px; color: var(--muted); font-size: 9px; }
+.clipboard-history-row { display: grid; width: 100%; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 10px; border: 0; border-top: 1px solid var(--line); background: transparent; padding: 11px 0; color: inherit; text-align: left; }
+.clipboard-history-row:hover { color: #fff; }
+.clipboard-history-row > span:first-child { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 9px; background: rgba(138, 168, 255, 0.1); color: var(--accent-strong); }
+.clipboard-history-row > span:last-child { display: grid; min-width: 0; gap: 3px; }
+.clipboard-history-row b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.clipboard-history-row small { color: var(--muted); font-size: 8px; }
 .planned-action { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 12px; border-radius: 17px; padding: 18px; }
 .planned-action > span { color: var(--accent-strong); font-size: 22px; }
 .planned-action b { font-size: 11px; }

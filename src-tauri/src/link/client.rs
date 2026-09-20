@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs::{self, OpenOptions},
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -14,7 +14,7 @@ use futures_util::StreamExt;
 use reqwest::{Client, Response, redirect::Policy};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
@@ -32,11 +32,12 @@ use super::{
 use crate::platform;
 
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
-const MAX_SHARE_FILE_BYTES: usize = 5 * 1024 * 1024;
+const MAX_SHARE_FILE_BYTES: usize = 64 * 1024 * 1024;
 const HEARTBEAT_EVENT: &str = "link-heartbeat";
 const HEALTHY_HEARTBEAT_SECONDS: u64 = 30;
 const MAX_RETRY_SECONDS: u64 = 5 * 60;
 const CLIPBOARD_POLL_MILLISECONDS: u64 = 900;
+const MAX_CLIPBOARD_HISTORY_ITEMS: usize = 50;
 
 pub struct HeartbeatService {
     wake: mpsc::Sender<()>,
@@ -87,6 +88,15 @@ pub struct ConnectionProfiles {
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardSyncStatus {
     enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardHistoryEntry {
+    id: String,
+    text: String,
+    direction: String,
+    created_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -176,6 +186,8 @@ pub struct ShareOfferSummary {
     kind: String,
     source_name: String,
     sent_at: String,
+    filename: Option<String>,
+    size: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -596,6 +608,7 @@ async fn send_heartbeat(
     let mut clipboard_event_ids =
         deliver_clipboard_updates(&envelope.events, clipboard_enabled, |text| {
             app.clipboard().write_text(text).map_err(|_| ())?;
+            record_clipboard_history(app, text, "received").map_err(|_| ())?;
             let mut current = clipboard_hash.lock().map_err(|_| ())?;
             *current = Some(clipboard_digest(text));
             Ok(())
@@ -755,7 +768,12 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
             let Ok(credential) = identity::load_credential(&profile.server_id) else {
                 continue;
             };
-            let _ = relay_clipboard_update(&profile, credential.as_str(), &text).await;
+            if relay_clipboard_update(&profile, credential.as_str(), &text)
+                .await
+                .is_ok()
+            {
+                let _ = record_clipboard_history(&clipboard_app, &text, "sent");
+            }
         }
     });
     HeartbeatService {
@@ -778,6 +796,21 @@ pub fn clipboard_sync_status() -> Result<ClipboardSyncStatus, String> {
     Ok(ClipboardSyncStatus {
         enabled: identity::clipboard_sync_enabled(&profile.server_id)?,
     })
+}
+
+#[tauri::command]
+pub fn clipboard_history(app: AppHandle) -> Result<Vec<ClipboardHistoryEntry>, String> {
+    load_clipboard_history(&app)
+}
+
+#[tauri::command]
+pub fn clear_clipboard_history(app: AppHandle) -> Result<(), String> {
+    let path = clipboard_history_path(&app)?;
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("Could not clear clipboard history.".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -836,6 +869,56 @@ fn valid_clipboard_text(value: &str) -> bool {
 
 fn clipboard_digest(value: &str) -> String {
     format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+
+fn clipboard_history_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Could not locate HomePlace application data.".to_string())?;
+    fs::create_dir_all(&directory)
+        .map_err(|_| "Could not prepare clipboard history storage.".to_string())?;
+    Ok(directory.join("clipboard-history.json"))
+}
+
+fn load_clipboard_history(app: &AppHandle) -> Result<Vec<ClipboardHistoryEntry>, String> {
+    let path = clipboard_history_path(app)?;
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err("Could not read clipboard history.".to_string()),
+    };
+    let mut entries: Vec<ClipboardHistoryEntry> = serde_json::from_slice(&bytes)
+        .map_err(|_| "The clipboard history is invalid.".to_string())?;
+    entries.truncate(MAX_CLIPBOARD_HISTORY_ITEMS);
+    Ok(entries)
+}
+
+fn record_clipboard_history(app: &AppHandle, text: &str, direction: &str) -> Result<(), String> {
+    if !valid_clipboard_text(text) {
+        return Ok(());
+    }
+    let digest = clipboard_digest(text);
+    let now = OffsetDateTime::now_utc();
+    let created_at = now
+        .format(&Rfc3339)
+        .map_err(|_| "Could not timestamp clipboard history.".to_string())?;
+    let mut entries = load_clipboard_history(app)?;
+    entries.retain(|entry| clipboard_digest(&entry.text) != digest);
+    entries.insert(
+        0,
+        ClipboardHistoryEntry {
+            id: format!("{}-{}", now.unix_timestamp_nanos(), &digest[..12]),
+            text: text.to_owned(),
+            direction: direction.to_owned(),
+            created_at,
+        },
+    );
+    entries.truncate(MAX_CLIPBOARD_HISTORY_ITEMS);
+    let encoded = serde_json::to_vec(&entries)
+        .map_err(|_| "Could not encode clipboard history.".to_string())?;
+    fs::write(clipboard_history_path(app)?, encoded)
+        .map_err(|_| "Could not save clipboard history.".to_string())
 }
 
 async fn relay_clipboard_update(
@@ -1110,6 +1193,14 @@ fn offer_summaries(offers: &OfferStore, server_id: &str) -> Result<Vec<ShareOffe
             },
             source_name: offer.source_name.clone(),
             sent_at: offer.sent_at.clone(),
+            filename: match &offer.content {
+                ShareContent::File(file) => Some(file.filename.clone()),
+                _ => None,
+            },
+            size: match &offer.content {
+                ShareContent::File(file) => Some(file.size),
+                _ => None,
+            },
         })
         .collect();
     summaries.sort_by(|left, right| left.sent_at.cmp(&right.sent_at));
@@ -2138,6 +2229,8 @@ mod tests {
                 kind: "url".into(),
                 source_name: "Phone".into(),
                 sent_at: "2026-09-20T17:59:00Z".into(),
+                filename: None,
+                size: None,
             }],
         })
         .unwrap();
@@ -2169,13 +2262,15 @@ mod tests {
             kind: "url".into(),
             source_name: offer.source_name,
             sent_at: offer.sent_at,
+            filename: None,
+            size: None,
         };
         let serialized = serde_json::to_value(summary).unwrap().to_string();
         assert!(!serialized.contains("example.net"));
     }
 
     #[test]
-    fn validates_file_offers_without_exposing_sensitive_metadata() {
+    fn exposes_safe_file_details_without_transfer_secrets() {
         let event = share_event(
             "share.offer",
             serde_json::json!({
@@ -2197,7 +2292,8 @@ mod tests {
         let serialized =
             serde_json::to_string(&offer_summaries(&store, "server").unwrap()).unwrap();
         assert!(serialized.contains("\"kind\":\"file\""));
-        assert!(!serialized.contains("private-document"));
+        assert!(serialized.contains("private-document.pdf"));
+        assert!(serialized.contains("\"size\":1024"));
         assert!(!serialized.contains("transfer_123"));
         assert!(!serialized.contains(&"a".repeat(64)));
     }

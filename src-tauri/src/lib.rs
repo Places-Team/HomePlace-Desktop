@@ -27,6 +27,13 @@ fn platform_info() -> BootstrapInfo {
     }
 }
 
+#[tauri::command]
+fn start_window_drag(window: tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .start_dragging()
+        .map_err(|_| "Could not start moving the HomePlace window.".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -75,6 +82,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             platform_info,
+            start_window_drag,
             startup::startup_status,
             startup::set_startup_enabled,
             link::client::verify_server,
@@ -86,6 +94,8 @@ pub fn run() {
             link::client::cancel_pairing,
             link::client::clipboard_sync_status,
             link::client::set_clipboard_sync,
+            link::client::clipboard_history,
+            link::client::clear_clipboard_history,
             link::client::list_reminders,
             link::client::list_calendar_events,
             link::client::create_calendar_event,

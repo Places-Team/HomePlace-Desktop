@@ -61,6 +61,13 @@ type ShareOfferSummary = {
   kind: "url" | "text" | "file";
   sourceName: string;
   sentAt: string;
+  filename?: string | null;
+  size?: number | null;
+};
+
+type TransferHistoryItem = ShareOfferSummary & {
+  action: "open" | "copy" | "save" | "decline";
+  resolvedAt: string;
 };
 
 type StartupStatus = {
@@ -69,6 +76,13 @@ type StartupStatus = {
 
 type ClipboardSyncStatus = {
   enabled: boolean;
+};
+
+type ClipboardHistoryEntry = {
+  id: string;
+  text: string;
+  direction: "sent" | "received";
+  createdAt: string;
 };
 
 type Reminder = {
@@ -202,6 +216,15 @@ export function App() {
   const [offers, setOffers] = useState<ShareOfferSummary[]>([]);
   const [offerBusy, setOfferBusy] = useState<string | null>(null);
   const [offerError, setOfferError] = useState<string | null>(null);
+  const [dismissedOfferId, setDismissedOfferId] = useState<string | null>(null);
+  const [transferHistory, setTransferHistory] = useState<TransferHistoryItem[]>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem("homeplace-transfer-history") ?? "[]") as unknown;
+      return Array.isArray(stored) ? (stored as TransferHistoryItem[]).slice(0, 50) : [];
+    } catch {
+      return [];
+    }
+  });
   const [reconnecting, setReconnecting] = useState(false);
   const [startupEnabled, setStartupEnabled] = useState(false);
   const [startupLoaded, setStartupLoaded] = useState(false);
@@ -210,6 +233,8 @@ export function App() {
   const [clipboardSyncEnabled, setClipboardSyncEnabled] = useState(false);
   const [clipboardSyncLoaded, setClipboardSyncLoaded] = useState(false);
   const [clipboardSyncBusy, setClipboardSyncBusy] = useState(false);
+  const [clipboardHistory, setClipboardHistory] = useState<ClipboardHistoryEntry[]>([]);
+  const [clipboardHistoryError, setClipboardHistoryError] = useState<string | null>(null);
   const [clipboardSyncError, setClipboardSyncError] = useState<string | null>(null);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [remindersLoaded, setRemindersLoaded] = useState(true);
@@ -279,6 +304,20 @@ export function App() {
     window.localStorage.setItem("homeplace-language", language);
     document.documentElement.lang = language;
   }, [language]);
+
+  useEffect(() => {
+    window.localStorage.setItem("homeplace-transfer-history", JSON.stringify(transferHistory.slice(0, 50)));
+  }, [transferHistory]);
+
+  useEffect(() => {
+    if (activeSection !== "clipboard") return;
+    void invoke<ClipboardHistoryEntry[]>("clipboard_history")
+      .then((entries) => {
+        setClipboardHistory(entries);
+        setClipboardHistoryError(null);
+      })
+      .catch((reason) => setClipboardHistoryError(errorMessage(reason)));
+  }, [activeSection, lastHeartbeat]);
 
   useEffect(() => {
     let cancelled = false;
@@ -694,6 +733,10 @@ export function App() {
         action,
       });
       setOffers(remaining);
+      setTransferHistory((current) => [
+        { ...offer, action, resolvedAt: new Date().toISOString() },
+        ...current.filter((item) => item.id !== offer.id),
+      ].slice(0, 50));
     } catch (reason) {
       setOfferError(errorMessage(reason));
     } finally {
@@ -959,10 +1002,20 @@ export function App() {
     });
   }
 
+  const incomingOffer = offers.find((offer) => offer.id !== dismissedOfferId) ?? null;
+
   return (
     <main className={`desktop-shell${sidebarHovered || sidebarFocused ? " sidebar-expanded" : ""}`}>
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
+      <div
+        className="window-drag-region"
+        data-tauri-drag-region
+        aria-hidden
+        onMouseDown={(event) => {
+          if (event.button === 0) void invoke("start_window_drag");
+        }}
+      />
 
       <aside
         className="app-sidebar"
@@ -1411,6 +1464,33 @@ export function App() {
             <article className="glass-card"><b>{ui.clipboard.loop}</b><p>{ui.clipboard.loopHint}</p></article>
             <article className="glass-card"><b>{ui.clipboard.private}</b><p>{ui.clipboard.privateHint}</p></article>
           </section>
+          <article className="glass-card transfer-list clipboard-history">
+            <div className="section-heading">
+              <div><p className="eyebrow">{ui.clipboard.eyebrow}</p><h3>{language === "ru" ? "История буфера" : "Clipboard history"}</h3></div>
+              {clipboardHistory.length > 0 && (
+                <button type="button" onClick={() => {
+                  void invoke("clear_clipboard_history")
+                    .then(() => setClipboardHistory([]))
+                    .catch((reason) => setClipboardHistoryError(errorMessage(reason)));
+                }}>{language === "ru" ? "Очистить" : "Clear"}</button>
+              )}
+            </div>
+            {clipboardHistory.length === 0 ? (
+              <div className="empty-state"><span><Icon name="clipboard" size={19} /></span><b>{language === "ru" ? "История пока пуста" : "History is empty"}</b><p>{language === "ru" ? "Здесь появится отправленный и полученный текст." : "Sent and received text will appear here."}</p></div>
+            ) : clipboardHistory.map((item) => (
+              <button
+                type="button"
+                className="clipboard-history-row"
+                key={item.id}
+                title={language === "ru" ? "Скопировать снова" : "Copy again"}
+                onClick={() => void navigator.clipboard.writeText(item.text)}
+              >
+                <span>{item.direction === "received" ? "↓" : "↑"}</span>
+                <span><b>{item.text}</b><small>{new Date(item.createdAt).toLocaleString()}</small></span>
+              </button>
+            ))}
+            {clipboardHistoryError && <p className="setting-error" role="alert">{clipboardHistoryError}</p>}
+          </article>
         </section>
       )}
 
@@ -1437,6 +1517,24 @@ export function App() {
               </div>
             ))}
           </article>
+          {transferHistory.length > 0 && (
+            <article className="glass-card transfer-list transfer-history">
+              <div className="section-heading">
+                <div><p className="eyebrow">{ui.transfers.title}</p><h3>{language === "ru" ? "История" : "History"}</h3></div>
+                <button type="button" onClick={() => setTransferHistory([])}>{language === "ru" ? "Очистить" : "Clear"}</button>
+              </div>
+              {transferHistory.map((item) => (
+                <div className="transfer-row" key={`${item.id}:${item.resolvedAt}`}>
+                  <span>{item.kind === "url" ? "↗" : item.kind === "file" ? "↓" : "T"}</span>
+                  <div>
+                    <b>{item.filename ?? (item.kind === "url" ? ui.transfers.open : item.kind === "text" ? ui.transfers.copy : ui.transfers.save)}</b>
+                    <small>{ui.transfers.from} {item.sourceName} · {new Date(item.resolvedAt).toLocaleString()}</small>
+                  </div>
+                  <em>{item.action === "decline" ? ui.transfers.decline : ui.transfers.accept}</em>
+                </div>
+              ))}
+            </article>
+          )}
           <article className="glass-card planned-action"><span><Icon name="plus" size={22} /></span><div><b>{ui.transfers.send}</b><p>{ui.transfers.sendHint}</p></div><small>{ui.transfers.next}</small></article>
         </section>
       )}
@@ -1706,6 +1804,50 @@ export function App() {
         <span>{ui.details.secrets}</span>
       </footer>
       </div>
+
+      {incomingOffer && (
+        <section className="incoming-offer-backdrop" role="dialog" aria-modal="true" aria-labelledby="incoming-offer-title">
+          <article className="incoming-offer-card glass-card">
+            <button
+              type="button"
+              className="incoming-offer-close"
+              aria-label={language === "ru" ? "Позже" : "Later"}
+              title={language === "ru" ? "Позже" : "Later"}
+              onClick={() => setDismissedOfferId(incomingOffer.id)}
+            >
+              ×
+            </button>
+            <span className="incoming-offer-icon" aria-hidden>
+              {incomingOffer.kind === "file" ? "↓" : incomingOffer.kind === "url" ? "↗" : "T"}
+            </span>
+            <div>
+              <p className="eyebrow">{ui.transfers.inbox}</p>
+              <h2 id="incoming-offer-title">{ui.transfers.waiting}</h2>
+              <p className="incoming-offer-source">{ui.transfers.from} {incomingOffer.sourceName}</p>
+              {incomingOffer.filename && (
+                <p className="incoming-offer-file">
+                  <b>{incomingOffer.filename}</b>
+                  {typeof incomingOffer.size === "number" && (
+                    <small>{(incomingOffer.size / 1024 / 1024).toFixed(incomingOffer.size >= 1024 * 1024 ? 1 : 2)} MiB</small>
+                  )}
+                </p>
+              )}
+            </div>
+            <div className="incoming-offer-actions">
+              <button type="button" disabled={offerBusy !== null} onClick={() => void handleOffer(incomingOffer, "decline")}>{ui.transfers.decline}</button>
+              <button
+                type="button"
+                className="primary-action"
+                disabled={offerBusy !== null}
+                onClick={() => void handleOffer(incomingOffer, incomingOffer.kind === "url" ? "open" : incomingOffer.kind === "file" ? "save" : "copy")}
+              >
+                {offerBusy === incomingOffer.id ? ui.devices.working : ui.transfers.accept}
+              </button>
+            </div>
+            {offerError && <p className="setting-error" role="alert">{offerError}</p>}
+          </article>
+        </section>
+      )}
     </main>
   );
 }
