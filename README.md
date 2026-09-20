@@ -1,0 +1,56 @@
+# HomePlace Desktop
+
+HomePlace Desktop is the native companion for a self-hosted HomePlace server.
+It connects Windows, macOS and Linux computers to HomePlace Link without making
+the three platforms look or behave identical.
+
+The application will provide secure device pairing, presence, notifications,
+clipboard and file transfer, URL opening, approved system actions and
+cross-device handoff. HomePlace remains the control centre and source of truth;
+the desktop application advertises only the capabilities the current computer
+can safely provide.
+
+## Platform experience
+
+- **macOS:** glass materials, native window vibrancy, a compact menu bar
+  experience, Keychain and familiar macOS interaction patterns.
+- **Windows:** Fluent styling, Mica or Acrylic where supported, a notification
+  area presence and Windows Credential Manager.
+- **Linux:** desktop-neutral controls, system tray support where available,
+  Secret Service integration and compositor-aware transparency with a solid
+  fallback.
+
+The shared core does not force a shared visual shell. Protocol handling,
+connection state, cryptography and data models are common; navigation, window
+chrome, materials and system integrations can vary by operating system.
+
+## Proposed stack
+
+- Tauri 2 for the desktop shell and distribution surface.
+- Rust for the Link client, secure command validation, transfers and platform
+  adapters.
+- React, TypeScript and Vite for the interface.
+- A versioned copy of the HomePlace Link schemas with compatibility tests.
+
+## Status
+
+The repository is in the architecture and protocol-alignment phase. The first
+working milestone is pairing with a HomePlace server, storing the device
+credential securely and reporting presence from the system tray.
+
+See [Development plan](docs/DEVELOPMENT_PLAN.md),
+[Architecture](docs/ARCHITECTURE.md) and
+[Platform design](docs/PLATFORM_DESIGN.md).
+
+## Related projects
+
+- [HomePlace](https://github.com/Places-Team/HomePlace) — self-hosted server and
+  web control centre.
+- [HomePlace Mobile](https://github.com/Places-Team/HomePlace-Mobile) — Android
+  and iOS companion.
+
+## License
+
+The project is intended to use the same Apache-2.0 license as HomePlace. The
+license file will be added with the first application scaffold.
+

@@ -1,0 +1,52 @@
+# Build output
+/dist/
+/target/
+/src-tauri/target/
+/.vite/
+
+# Dependencies
+/node_modules/
+
+# Environment and signing material
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.key
+*.pem
+
+# Platform files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors and local tooling
+.idea/
+.vscode/
+*.swp
+*.swo
+.claude/
+.codex/
+.cursor/
+.continue/
+.windsurf/
+.aider*
+AGENTS.md
+CLAUDE.md
+
+# Logs, coverage and temporary files
+*.log
+/coverage/
+/.tmp/
+/tmp/
+
+# Local application data
+/data/
+*.db
+*.db-shm
+*.db-wal
+
