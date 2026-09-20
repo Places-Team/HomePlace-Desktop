@@ -105,6 +105,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             platform_info,
             start_window_drag,
+            tray::open_quick_share,
             tray::set_quick_share_pointer_inside,
             startup::startup_status,
             startup::set_startup_enabled,
@@ -119,6 +120,7 @@ pub fn run() {
             link::client::set_clipboard_sync,
             link::client::clipboard_history,
             link::client::clear_clipboard_history,
+            link::client::remove_clipboard_history,
             link::client::list_share_targets,
             link::client::send_share_text,
             link::client::send_share_file,

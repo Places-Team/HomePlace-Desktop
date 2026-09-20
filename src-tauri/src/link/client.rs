@@ -840,6 +840,23 @@ pub fn clear_clipboard_history(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn remove_clipboard_history(
+    app: AppHandle,
+    id: String,
+) -> Result<Vec<ClipboardHistoryEntry>, String> {
+    if !safe_identifier(&id) {
+        return Err("The clipboard history entry is invalid.".into());
+    }
+    let mut entries = load_clipboard_history(&app)?;
+    entries.retain(|entry| entry.id != id);
+    let encoded = serde_json::to_vec(&entries)
+        .map_err(|_| "Could not encode clipboard history.".to_string())?;
+    fs::write(clipboard_history_path(&app)?, encoded)
+        .map_err(|_| "Could not save clipboard history.".to_string())?;
+    Ok(entries)
+}
+
+#[tauri::command]
 pub async fn list_share_targets() -> Result<Vec<ShareTarget>, String> {
     let profile = identity::load_profile()?
         .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
@@ -1262,23 +1279,26 @@ fn sync_share_offers(
     }
 
     for offer in new_offers {
-        let kind = match offer.content {
-            ShareContent::Url(_) => "link",
-            ShareContent::Text(_) => "text",
-            ShareContent::File(_) => "file",
-        };
-        let _ = app
-            .notification()
-            .builder()
-            .title("HomePlace Link")
-            .body(format!(
-                "New {kind} from {} is waiting for approval.",
-                offer.source_name
-            ))
-            .show();
+        let (title, body) = share_offer_notification(&offer);
+        let _ = app.notification().builder().title(title).body(body).show();
     }
 
     offer_summaries(offers, &profile.server_id)
+}
+
+fn share_offer_notification(offer: &PendingShareOffer) -> (String, String) {
+    let (title, subject) = match &offer.content {
+        ShareContent::Url(_) => ("Incoming link", "A link".to_string()),
+        ShareContent::Text(_) => ("Incoming text", "Text".to_string()),
+        ShareContent::File(file) => ("Incoming file", file.filename.clone()),
+    };
+    (
+        format!("HomePlace Link · {title}"),
+        format!(
+            "{subject} from {} is waiting for approval. Open HomePlace to accept it.",
+            offer.source_name,
+        ),
+    )
 }
 
 fn pending_share_offer(event: &HeartbeatEvent, server_id: &str) -> Option<PendingShareOffer> {
@@ -2573,6 +2593,29 @@ mod tests {
         assert!(serialized.contains("\"size\":1024"));
         assert!(!serialized.contains("transfer_123"));
         assert!(!serialized.contains(&"a".repeat(64)));
+    }
+
+    #[test]
+    fn describes_incoming_files_in_system_notifications() {
+        let event = share_event(
+            "share.offer",
+            serde_json::json!({
+                "type": "file",
+                "transferId": "transfer_123",
+                "filename": "HomePlace.apk",
+                "mimeType": "application/vnd.android.package-archive",
+                "size": 1024,
+                "sha256": "a".repeat(64),
+                "sourceName": "Android phone"
+            }),
+        );
+        let offer = pending_share_offer(&event, "server").unwrap();
+        let (title, body) = share_offer_notification(&offer);
+
+        assert_eq!(title, "HomePlace Link · Incoming file");
+        assert!(body.contains("HomePlace.apk"));
+        assert!(body.contains("Android phone"));
+        assert!(body.contains("Open HomePlace"));
     }
 
     #[test]

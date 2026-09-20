@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { FormEvent, useEffect, useLayoutEffect, useState } from "react";
+import { FormEvent, type MouseEvent as ReactMouseEvent, useEffect, useLayoutEffect, useState } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { copy, type Language } from "./lib/i18n";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
@@ -133,6 +133,20 @@ type AppSection =
   | "productivity"
   | "notifications"
   | "settings";
+
+type ContextAction = {
+  label: string;
+  icon: IconName;
+  disabled?: boolean;
+  danger?: boolean;
+  run: () => void;
+};
+
+type ContextMenuState = {
+  x: number;
+  y: number;
+  actions: ContextAction[];
+};
 
 const navigation: Array<{
   id: AppSection;
@@ -283,6 +297,57 @@ function MainApp() {
   const [calendarAllDay, setCalendarAllDay] = useState(false);
   const [calendarLocation, setCalendarLocation] = useState("");
   const [calendarBusy, setCalendarBusy] = useState(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
+  const contextLabels = language === "ru"
+    ? {
+        open: "Открыть",
+        quickShare: "Быстрая отправка",
+        reconnect: "Переподключиться",
+        copyAddress: "Скопировать адрес",
+        copy: "Скопировать",
+        send: "Отправить на устройство",
+        accept: "Принять",
+        decline: "Отклонить",
+        edit: "Изменить",
+        complete: "Выполнить",
+        remove: "Удалить",
+        clear: "Очистить историю",
+        close: "Закрыть меню",
+      }
+    : {
+        open: "Open",
+        quickShare: "Quick share",
+        reconnect: "Reconnect",
+        copyAddress: "Copy address",
+        copy: "Copy",
+        send: "Send to a device",
+        accept: "Accept",
+        decline: "Decline",
+        edit: "Edit",
+        complete: "Complete",
+        remove: "Delete",
+        clear: "Clear history",
+        close: "Close menu",
+      };
+
+  function openContextMenu(event: ReactMouseEvent, actions: ContextAction[]) {
+    event.preventDefault();
+    event.stopPropagation();
+    const width = 238;
+    const height = actions.length * 38 + 12;
+    setContextMenu({
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
+      actions,
+    });
+  }
+
+  function openQuickShare(text?: string) {
+    void invoke("open_quick_share", { text: text || null }).catch((reason) => {
+      setOfferError(errorMessage(reason));
+    });
+  }
 
   useEffect(() => {
     invoke<PlatformInfo>("platform_info")
@@ -328,6 +393,37 @@ function MainApp() {
     window.localStorage.setItem("homeplace-language", language);
     document.documentElement.lang = language;
   }, [language]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [contextMenu]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let stopListening: (() => void) | undefined;
+    void listen<string>("navigate-section", ({ payload }) => {
+      const section = navigation.find((item) => item.id === payload)?.id;
+      if (!cancelled && section) setActiveSection(section);
+    }).then((unlisten) => {
+      if (cancelled) unlisten(); else stopListening = unlisten;
+    });
+    return () => {
+      cancelled = true;
+      stopListening?.();
+    };
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem("homeplace-transfer-history", JSON.stringify(transferHistory.slice(0, 50)));
@@ -978,7 +1074,23 @@ function MainApp() {
     return items.map((reminder) => {
       const at = new Date(reminder.at);
       return (
-        <div className="reminder-item" key={reminder.id}>
+        <div
+          className="reminder-item"
+          key={reminder.id}
+          onContextMenu={(event) => openContextMenu(event, [
+            { label: contextLabels.complete, icon: "check", disabled: reminderBusy, run: () => void resolveReminder("complete_reminder", reminder.id) },
+            { label: contextLabels.edit, icon: "edit", disabled: reminderBusy, run: () => editReminder(reminder) },
+            {
+              label: contextLabels.remove,
+              icon: "trash",
+              danger: true,
+              disabled: reminderBusy,
+              run: () => {
+                if (window.confirm(ui.productivity.deleteReminderConfirm)) void resolveReminder("delete_reminder", reminder.id);
+              },
+            },
+          ])}
+        >
           <button
             type="button"
             className="reminder-complete"
@@ -1065,6 +1177,11 @@ function MainApp() {
               aria-label={ui.nav[item.id]}
               title={ui.nav[item.id]}
               onClick={() => setActiveSection(item.id)}
+              onContextMenu={(event) => openContextMenu(event, [
+                { label: contextLabels.open, icon: item.icon, run: () => setActiveSection(item.id) },
+                { label: contextLabels.quickShare, icon: "transfer", disabled: !activeServerId, run: () => openQuickShare() },
+                { label: contextLabels.reconnect, icon: "refresh", disabled: !activeServerId || reconnecting, run: () => void reconnectNow() },
+              ])}
             >
               <Icon name={item.icon} size={22} className="nav-icon" />
               <span className="nav-label">{ui.nav[item.id]}</span>
@@ -1140,6 +1257,12 @@ function MainApp() {
                   aria-pressed={profile.serverId === activeServerId}
                   disabled={busy || state === "pairing"}
                   onClick={() => void switchProfile(profile.serverId)}
+                  onContextMenu={(event) => openContextMenu(event, [
+                    { label: contextLabels.open, icon: "devices", disabled: profile.serverId === activeServerId, run: () => void switchProfile(profile.serverId) },
+                    { label: contextLabels.copyAddress, icon: "link", run: () => void navigator.clipboard.writeText(profile.address) },
+                    { label: contextLabels.quickShare, icon: "transfer", disabled: profile.serverId !== activeServerId, run: () => openQuickShare() },
+                    { label: contextLabels.reconnect, icon: "refresh", disabled: profile.serverId !== activeServerId || reconnecting, run: () => void reconnectNow() },
+                  ])}
                   title={profile.address}
                   key={profile.serverId}
                 >
@@ -1298,7 +1421,19 @@ function MainApp() {
                   <span>{offers.length}</span>
                 </div>
                 {offers.map((offer) => (
-                  <article key={offer.id} className="offer-row">
+                  <article
+                    key={offer.id}
+                    className="offer-row"
+                    onContextMenu={(event) => openContextMenu(event, [
+                      {
+                        label: contextLabels.accept,
+                        icon: "check",
+                        disabled: offerBusy !== null,
+                        run: () => void handleOffer(offer, offer.kind === "url" ? "open" : offer.kind === "file" ? "save" : "copy"),
+                      },
+                      { label: contextLabels.decline, icon: "trash", danger: true, disabled: offerBusy !== null, run: () => void handleOffer(offer, "decline") },
+                    ])}
+                  >
                     <span className="offer-icon" aria-hidden>
                       {offer.kind === "url" ? "↗" : offer.kind === "file" ? "↓" : "T"}
                     </span>
@@ -1504,6 +1639,20 @@ function MainApp() {
                 key={item.id}
                 title={language === "ru" ? "Скопировать снова" : "Copy again"}
                 onClick={() => void navigator.clipboard.writeText(item.text)}
+                onContextMenu={(event) => openContextMenu(event, [
+                  { label: contextLabels.copy, icon: "clipboard", run: () => void navigator.clipboard.writeText(item.text) },
+                  { label: contextLabels.send, icon: "transfer", disabled: !activeServerId, run: () => openQuickShare(item.text) },
+                  {
+                    label: contextLabels.remove,
+                    icon: "trash",
+                    danger: true,
+                    run: () => {
+                      void invoke<ClipboardHistoryEntry[]>("remove_clipboard_history", { id: item.id })
+                        .then(setClipboardHistory)
+                        .catch((reason) => setClipboardHistoryError(errorMessage(reason)));
+                    },
+                  },
+                ])}
               >
                 <span>{item.direction === "received" ? "↓" : "↑"}</span>
                 <span><b>{item.text}</b><small>{new Date(item.createdAt).toLocaleString()}</small></span>
@@ -1529,7 +1678,19 @@ function MainApp() {
             {offers.length === 0 ? (
               <div className="empty-state"><span><Icon name="check" size={19} /></span><b>{ui.transfers.empty}</b><p>{ui.transfers.emptyHint}</p></div>
             ) : offers.map((offer) => (
-              <div className="transfer-row" key={offer.id}>
+              <div
+                className="transfer-row"
+                key={offer.id}
+                onContextMenu={(event) => openContextMenu(event, [
+                  {
+                    label: contextLabels.accept,
+                    icon: "check",
+                    disabled: offerBusy !== null,
+                    run: () => void handleOffer(offer, offer.kind === "url" ? "open" : offer.kind === "file" ? "save" : "copy"),
+                  },
+                  { label: contextLabels.decline, icon: "trash", danger: true, disabled: offerBusy !== null, run: () => void handleOffer(offer, "decline") },
+                ])}
+              >
                 <span>{offer.kind === "url" ? "↗" : offer.kind === "file" ? "↓" : "T"}</span>
                 <div><b>{offer.kind === "url" ? ui.transfers.open : offer.kind === "file" ? ui.transfers.save : ui.transfers.copy}</b><small>{ui.transfers.from} {offer.sourceName}</small></div>
                 <button type="button" disabled={offerBusy !== null} onClick={() => void handleOffer(offer, offer.kind === "url" ? "open" : offer.kind === "file" ? "save" : "copy")}>{ui.transfers.accept}</button>
@@ -1544,7 +1705,29 @@ function MainApp() {
                 <button type="button" onClick={() => setTransferHistory([])}>{language === "ru" ? "Очистить" : "Clear"}</button>
               </div>
               {transferHistory.map((item) => (
-                <div className="transfer-row" key={`${item.id}:${item.resolvedAt}`}>
+                <div
+                  className="transfer-row"
+                  key={`${item.id}:${item.resolvedAt}`}
+                  onContextMenu={(event) => openContextMenu(event, [
+                    {
+                      label: contextLabels.copy,
+                      icon: "clipboard",
+                      run: () => void navigator.clipboard.writeText(item.filename ?? item.sourceName),
+                    },
+                    {
+                      label: contextLabels.remove,
+                      icon: "trash",
+                      danger: true,
+                      run: () => setTransferHistory((current) => current.filter((entry) => entry !== item)),
+                    },
+                    {
+                      label: contextLabels.clear,
+                      icon: "trash",
+                      danger: true,
+                      run: () => setTransferHistory([]),
+                    },
+                  ])}
+                >
                   <span>{item.kind === "url" ? "↗" : item.kind === "file" ? "↓" : "T"}</span>
                   <div>
                     <b>{item.filename ?? (item.kind === "url" ? ui.transfers.open : item.kind === "text" ? ui.transfers.copy : ui.transfers.save)}</b>
@@ -1658,7 +1841,19 @@ function MainApp() {
                 ) : (
                   <div className="agenda-list">
                     {selectedCalendarEvents.map((event) => (
-                      <div className="agenda-item" key={event.id}>
+                    <div
+                      className="agenda-item"
+                      key={event.id}
+                      onContextMenu={(menuEvent) => openContextMenu(menuEvent, [
+                        { label: contextLabels.edit, icon: "edit", disabled: calendarBusy, run: () => editCalendarEvent(event) },
+                        {
+                          label: contextLabels.copy,
+                          icon: "clipboard",
+                          run: () => void navigator.clipboard.writeText(`${event.summary}${event.location ? ` · ${event.location}` : ""}`),
+                        },
+                        { label: contextLabels.remove, icon: "trash", danger: true, disabled: calendarBusy, run: () => void removeCalendarEvent(event.id) },
+                      ])}
+                    >
                         <time>{event.allDay ? ui.productivity.allDay : new Date(event.start).toLocaleTimeString(language === "ru" ? "ru-RU" : "en-US", { hour: "2-digit", minute: "2-digit" })}</time>
                         <span><b>{event.summary || ui.productivity.untitledEvent}</b>{event.location && <small>{event.location}</small>}</span>
                         <div className="agenda-item-actions">
@@ -1825,9 +2020,58 @@ function MainApp() {
       </footer>
       </div>
 
+      {contextMenu && (
+        <>
+          <button
+            type="button"
+            className="context-menu-backdrop"
+            aria-label={contextLabels.close}
+            onClick={() => setContextMenu(null)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setContextMenu(null);
+            }}
+          />
+          <div
+            className="context-menu"
+            role="menu"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            {contextMenu.actions.map((action, index) => (
+              <button
+                type="button"
+                role="menuitem"
+                className={action.danger ? "danger" : undefined}
+                disabled={action.disabled}
+                key={`${action.label}:${index}`}
+                onClick={() => {
+                  setContextMenu(null);
+                  action.run();
+                }}
+              >
+                <Icon name={action.icon} size={15} />
+                <span>{action.label}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
       {incomingOffer && (
         <section className="incoming-offer-backdrop" role="dialog" aria-modal="true" aria-labelledby="incoming-offer-title">
-          <article className="incoming-offer-card glass-card">
+          <article
+            className="incoming-offer-card glass-card"
+            onContextMenu={(event) => openContextMenu(event, [
+              {
+                label: contextLabels.accept,
+                icon: "check",
+                disabled: offerBusy !== null,
+                run: () => void handleOffer(incomingOffer, incomingOffer.kind === "url" ? "open" : incomingOffer.kind === "file" ? "save" : "copy"),
+              },
+              { label: contextLabels.decline, icon: "trash", danger: true, disabled: offerBusy !== null, run: () => void handleOffer(incomingOffer, "decline") },
+            ])}
+          >
             <button
               type="button"
               className="incoming-offer-close"
@@ -1895,11 +2139,17 @@ function QuickShareWindow() {
   useEffect(() => {
     let cancelled = false;
     let stopOpen: (() => void) | undefined;
+    let stopStage: (() => void) | undefined;
     let stopDrop: (() => void) | undefined;
     void listen("quick-share-opened", () => {
       if (!cancelled) loadTargets();
     }).then((unlisten) => {
       if (cancelled) unlisten(); else stopOpen = unlisten;
+    });
+    void listen<string>("quick-share-stage-text", ({ payload: stagedText }) => {
+      if (!cancelled) stageText(stagedText);
+    }).then((unlisten) => {
+      if (cancelled) unlisten(); else stopStage = unlisten;
     });
     void getCurrentWebview().onDragDropEvent((event) => {
       if (cancelled) return;
@@ -1922,6 +2172,7 @@ function QuickShareWindow() {
     return () => {
       cancelled = true;
       stopOpen?.();
+      stopStage?.();
       stopDrop?.();
     };
   }, []);

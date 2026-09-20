@@ -18,6 +18,7 @@ static QUICK_SHARE_POINTER_INSIDE: AtomicBool = AtomicBool::new(false);
 enum TrayCommand {
     QuickShare,
     Show,
+    Navigate(&'static str),
     Reconnect,
     Quit,
 }
@@ -62,6 +63,10 @@ pub fn install(app: &App) -> tauri::Result<()> {
             match tray_command(id) {
                 Some(TrayCommand::QuickShare) => show_quick_share_near_cursor(app),
                 Some(TrayCommand::Show) => show_main_window(app),
+                Some(TrayCommand::Navigate(section)) => {
+                    show_main_window(app);
+                    let _ = app.emit("navigate-section", section);
+                }
                 Some(TrayCommand::Reconnect) => {
                     if let Some(service) = app.try_state::<crate::link::client::HeartbeatService>()
                     {
@@ -102,6 +107,28 @@ fn build_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>> {
     let quick_share = MenuItem::with_id(app, "quick-share", "Quick Share", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open HomePlace", true, None::<&str>)?;
     let reconnect = MenuItem::with_id(app, "reconnect", "Reconnect now", true, None::<&str>)?;
+    let devices = MenuItem::with_id(app, "navigate:devices", "Devices", true, None::<&str>)?;
+    let clipboard = MenuItem::with_id(
+        app,
+        "navigate:clipboard",
+        "Clipboard history",
+        true,
+        None::<&str>,
+    )?;
+    let transfers = MenuItem::with_id(app, "navigate:transfers", "Transfers", true, None::<&str>)?;
+    let productivity = MenuItem::with_id(
+        app,
+        "navigate:productivity",
+        "Productivity",
+        true,
+        None::<&str>,
+    )?;
+    let sections = Submenu::with_items(
+        app,
+        "Open section",
+        true,
+        &[&devices, &clipboard, &transfers, &productivity],
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit HomePlace", true, None::<&str>)?;
 
@@ -144,7 +171,15 @@ fn build_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>> {
 
     Menu::with_items(
         app,
-        &[&quick_share, &open, &servers, &reconnect, &separator, &quit],
+        &[
+            &quick_share,
+            &open,
+            &sections,
+            &servers,
+            &reconnect,
+            &separator,
+            &quit,
+        ],
     )
 }
 
@@ -160,6 +195,25 @@ fn show_quick_share_near_cursor<R: Runtime>(app: &AppHandle<R>) {
         size: Size::Physical(PhysicalSize::new(1, 1)),
     };
     show_quick_share(app, rect, true);
+}
+
+#[tauri::command]
+pub fn open_quick_share(app: AppHandle, text: Option<String>) -> Result<(), String> {
+    if let Some(value) = text {
+        let value = value.trim();
+        if value.is_empty()
+            || value.chars().count() > 8_000
+            || value
+                .chars()
+                .any(|character| character.is_control() && character != '\n' && character != '\t')
+        {
+            return Err("The quick-share text is invalid.".into());
+        }
+        app.emit("quick-share-stage-text", value)
+            .map_err(|_| "Could not prepare the quick-share window.".to_string())?;
+    }
+    show_quick_share_near_cursor(&app);
+    Ok(())
 }
 
 pub fn refresh_menu<R: Runtime>(app: &AppHandle<R>) {
@@ -261,6 +315,10 @@ fn tray_command(id: &str) -> Option<TrayCommand> {
     match id {
         "quick-share" => Some(TrayCommand::QuickShare),
         "open" => Some(TrayCommand::Show),
+        "navigate:devices" => Some(TrayCommand::Navigate("devices")),
+        "navigate:clipboard" => Some(TrayCommand::Navigate("clipboard")),
+        "navigate:transfers" => Some(TrayCommand::Navigate("transfers")),
+        "navigate:productivity" => Some(TrayCommand::Navigate("productivity")),
         "reconnect" => Some(TrayCommand::Reconnect),
         "quit" => Some(TrayCommand::Quit),
         _ => None,
@@ -289,6 +347,10 @@ mod tests {
     fn maps_only_known_tray_commands() {
         assert_eq!(tray_command("quick-share"), Some(TrayCommand::QuickShare));
         assert_eq!(tray_command("open"), Some(TrayCommand::Show));
+        assert_eq!(
+            tray_command("navigate:transfers"),
+            Some(TrayCommand::Navigate("transfers"))
+        );
         assert_eq!(tray_command("reconnect"), Some(TrayCommand::Reconnect));
         assert_eq!(tray_command("quit"), Some(TrayCommand::Quit));
         assert_eq!(tray_command("notification.deliver"), None);

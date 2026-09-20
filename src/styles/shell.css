@@ -235,6 +235,48 @@ html[data-window="quick-share"] #root {
 .app-sidebar:hover + .app-content::before,
 .app-sidebar:focus-within + .app-content::before { opacity: 1; }
 
+.context-menu-backdrop {
+  position: fixed;
+  z-index: 99;
+  inset: 0;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+.context-menu {
+  position: fixed;
+  z-index: 100;
+  display: grid;
+  width: 238px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 12px;
+  background: rgba(24, 27, 37, 0.97);
+  padding: 5px;
+  box-shadow: 0 20px 55px rgba(0, 0, 0, 0.48), inset 0 1px rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(24px) saturate(1.2);
+}
+.context-menu button {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 0 9px;
+  color: rgba(246, 247, 251, 0.86);
+  text-align: left;
+  font-size: 10px;
+}
+.context-menu button:hover:not(:disabled),
+.context-menu button:focus-visible { background: rgba(138, 168, 255, 0.13); color: #fff; outline: none; }
+.context-menu button:disabled { opacity: 0.35; }
+.context-menu button.danger { color: #ffadb5; }
+.context-menu button.danger:hover:not(:disabled) { background: rgba(255, 105, 120, 0.13); }
+.context-menu button svg { justify-self: center; color: currentColor; }
+
 .incoming-offer-backdrop {
   position: fixed;
   z-index: 80;
