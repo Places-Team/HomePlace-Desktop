@@ -52,9 +52,15 @@ action. Revocation, secure local forgetting and credential cleanup are also
 supported. Desktop can receive bounded files through a native save dialog,
 verify their size and SHA-256 in Rust and commit them through a temporary file
 without exposing file metadata or contents to the React interface. The native
-tray keeps Link active after
-the window closes, and the Rust heartbeat service continues independently of
-the interface. Users can explicitly enable start-at-login, which launches Link
+tray keeps Link active after the window closes, and the Rust heartbeat service
+continues independently of the interface.
+
+Users can opt into seamless clipboard mode per HomePlace server. Desktop then
+relays newly copied text to the user's other paired devices, applies incoming
+clipboard updates automatically and suppresses round-trips with content
+hashes. Enabling the mode does not upload the text already in the clipboard.
+
+Users can explicitly enable start-at-login, which launches Link
 hidden in the tray without enabling itself by default. Multiple HomePlace
 servers can now be paired concurrently, switched from the window or tray and
 forgotten independently without exposing their credentials. Realtime transport

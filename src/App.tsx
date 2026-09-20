@@ -65,6 +65,10 @@ type StartupStatus = {
   enabled: boolean;
 };
 
+type ClipboardSyncStatus = {
+  enabled: boolean;
+};
+
 const steps = ["Server", "Verify", "Approve", "Connected"];
 
 function errorMessage(error: unknown): string {
@@ -118,6 +122,10 @@ export function App() {
   const [startupLoaded, setStartupLoaded] = useState(false);
   const [startupBusy, setStartupBusy] = useState(false);
   const [startupError, setStartupError] = useState<string | null>(null);
+  const [clipboardSyncEnabled, setClipboardSyncEnabled] = useState(false);
+  const [clipboardSyncLoaded, setClipboardSyncLoaded] = useState(false);
+  const [clipboardSyncBusy, setClipboardSyncBusy] = useState(false);
+  const [clipboardSyncError, setClipboardSyncError] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<PlatformInfo>("platform_info")
@@ -294,6 +302,24 @@ export function App() {
       stopListening?.();
       window.removeEventListener("online", wake);
       document.removeEventListener("visibilitychange", wake);
+    };
+  }, [activeServerId]);
+
+  useEffect(() => {
+    if (!activeServerId) return;
+    let cancelled = false;
+    invoke<ClipboardSyncStatus>("clipboard_sync_status")
+      .then((status) => {
+        if (!cancelled) setClipboardSyncEnabled(status.enabled);
+      })
+      .catch((reason) => {
+        if (!cancelled) setClipboardSyncError(errorMessage(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setClipboardSyncLoaded(true);
+      });
+    return () => {
+      cancelled = true;
     };
   }, [activeServerId]);
 
@@ -516,6 +542,20 @@ export function App() {
       setStartupError(errorMessage(reason));
     } finally {
       setStartupBusy(false);
+    }
+  }
+
+  async function updateClipboardSync(enabled: boolean) {
+    if (clipboardSyncBusy) return;
+    setClipboardSyncBusy(true);
+    setClipboardSyncError(null);
+    try {
+      const status = await invoke<ClipboardSyncStatus>("set_clipboard_sync", { enabled });
+      setClipboardSyncEnabled(status.enabled);
+    } catch (reason) {
+      setClipboardSyncError(errorMessage(reason));
+    } finally {
+      setClipboardSyncBusy(false);
     }
   }
 
@@ -831,6 +871,25 @@ export function App() {
             {startupError && (
               <span className="setting-error" role="alert">
                 {startupError}
+              </span>
+            )}
+            <label className="startup-setting">
+              <span>
+                <b>Seamless clipboard sync</b>
+                <small>
+                  Automatically sync copied text with your other paired devices. Clipboard contents stay inside your HomePlace account.
+                </small>
+              </span>
+              <input
+                type="checkbox"
+                checked={clipboardSyncEnabled}
+                disabled={!clipboardSyncLoaded || clipboardSyncBusy}
+                onChange={(event) => void updateClipboardSync(event.target.checked)}
+              />
+            </label>
+            {clipboardSyncError && (
+              <span className="setting-error" role="alert">
+                {clipboardSyncError}
               </span>
             )}
           </section>

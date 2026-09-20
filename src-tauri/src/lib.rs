@@ -84,6 +84,8 @@ pub fn run() {
             link::client::connection_profiles,
             link::client::activate_profile,
             link::client::cancel_pairing,
+            link::client::clipboard_sync_status,
+            link::client::set_clipboard_sync,
             link::client::resolve_share_offer,
             link::client::request_heartbeat,
             link::client::disconnect_device

@@ -72,6 +72,11 @@ realtime transport remain.
   allowed for a trusted device.
 - Add per-capability enable, ask and deny policies.
 
+Current progress: seamless clipboard is available as a per-server opt-in.
+Desktop detects newly copied text, relays it only through the paired HomePlace
+account, applies incoming clipboard updates and suppresses round-trip loops.
+The ask-before-write path remains the default.
+
 Exit criteria: every advertised capability works on its target platform and
 disappears from the manifest when unavailable or denied.
 

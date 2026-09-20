@@ -102,6 +102,25 @@ pub fn load_credential(server_id: &str) -> Result<Zeroizing<String>, String> {
         })
 }
 
+pub fn clipboard_sync_enabled(server_id: &str) -> Result<bool, String> {
+    match entry("clipboard-sync", server_id)?.get_password() {
+        Ok(value) => Ok(value == "enabled"),
+        Err(KeyringError::NoEntry) => Ok(false),
+        Err(_) => Err(secure_storage_error()),
+    }
+}
+
+pub fn store_clipboard_sync(server_id: &str, enabled: bool) -> Result<(), String> {
+    let preference = entry("clipboard-sync", server_id)?;
+    if enabled {
+        preference
+            .set_password("enabled")
+            .map_err(|_| secure_storage_error())
+    } else {
+        delete_entry(preference)
+    }
+}
+
 pub fn store_profile(profile: &StoredProfile) -> Result<(), String> {
     let profiles = upsert_profile(load_profiles()?, profile.clone())?;
     store_profiles(&profiles)?;
@@ -167,7 +186,7 @@ pub fn delete_profile(server_id: &str) -> Result<(), String> {
     }
 
     let mut failed = false;
-    for kind in ["pending", "credential", "identity"] {
+    for kind in ["pending", "credential", "identity", "clipboard-sync"] {
         if delete_entry(entry(kind, server_id)?).is_err() {
             failed = true;
         }

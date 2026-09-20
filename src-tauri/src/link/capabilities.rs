@@ -38,6 +38,11 @@ pub fn initial_capabilities() -> Vec<Capability> {
             constraints: BTreeMap::from([("confirmation", "required")]),
         },
         Capability {
+            name: "clipboard.send",
+            version: 1,
+            constraints: BTreeMap::from([("policy", "user-controlled")]),
+        },
+        Capability {
             name: "file.receive",
             version: 1,
             constraints: BTreeMap::from([("confirmation", "required"), ("maxBytes", "5242880")]),
@@ -52,7 +57,7 @@ mod tests {
     #[test]
     fn scaffold_advertises_only_implemented_capabilities() {
         let capabilities = initial_capabilities();
-        assert_eq!(capabilities.len(), 6);
+        assert_eq!(capabilities.len(), 7);
         assert!(
             capabilities
                 .iter()
@@ -69,6 +74,11 @@ mod tests {
             capabilities
                 .iter()
                 .any(|item| item.name == "clipboard.receive")
+        );
+        assert!(
+            capabilities
+                .iter()
+                .any(|item| item.name == "clipboard.send")
         );
         assert!(capabilities.iter().any(|item| item.name == "file.receive"));
         assert!(!capabilities.iter().any(|item| item.name == "system.shell"));

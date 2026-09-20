@@ -3,7 +3,10 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -33,10 +36,13 @@ const MAX_SHARE_FILE_BYTES: usize = 5 * 1024 * 1024;
 const HEARTBEAT_EVENT: &str = "link-heartbeat";
 const HEALTHY_HEARTBEAT_SECONDS: u64 = 30;
 const MAX_RETRY_SECONDS: u64 = 5 * 60;
+const CLIPBOARD_POLL_MILLISECONDS: u64 = 900;
 
 pub struct HeartbeatService {
     wake: mpsc::Sender<()>,
     offers: OfferStore,
+    clipboard_hash: Arc<Mutex<Option<String>>>,
+    clipboard_enabled: Arc<AtomicBool>,
 }
 
 impl HeartbeatService {
@@ -75,6 +81,12 @@ pub struct PairingStatus {
 pub struct ConnectionProfiles {
     profiles: Vec<StoredProfile>,
     active_server_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardSyncStatus {
+    enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -488,6 +500,16 @@ pub fn activate_profile(
     service: State<'_, HeartbeatService>,
 ) -> Result<StoredProfile, String> {
     let profile = activate_stored_profile(&server_id)?;
+    let clipboard_enabled = identity::clipboard_sync_enabled(&profile.server_id)?;
+    service
+        .clipboard_enabled
+        .store(clipboard_enabled, Ordering::Relaxed);
+    let current = app.clipboard().read_text().unwrap_or_default();
+    *service
+        .clipboard_hash
+        .lock()
+        .map_err(|_| "Could not update clipboard synchronisation state.".to_string())? =
+        Some(clipboard_digest(&current));
     crate::tray::refresh_menu(&app);
     service.wake();
     Ok(profile)
@@ -515,14 +537,26 @@ pub fn cancel_pairing(server_id: String) -> Result<(), String> {
     identity::delete_pending(&server_id)
 }
 
-async fn send_heartbeat(app: &AppHandle, offers: &OfferStore) -> Result<HeartbeatStatus, String> {
+async fn send_heartbeat(
+    app: &AppHandle,
+    offers: &OfferStore,
+    clipboard_hash: &Arc<Mutex<Option<String>>>,
+    clipboard_enabled: bool,
+) -> Result<HeartbeatStatus, String> {
     let profile = identity::load_profile()?
         .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
     validate_stored_profile(&profile)?;
     let credential = identity::load_credential(&profile.server_id)?;
 
     let envelope = heartbeat_request(&profile, credential.as_str(), &[]).await?;
-    let (acknowledged_event_ids, delivered_notifications, notification_failures) =
+    let mut clipboard_event_ids =
+        deliver_clipboard_updates(&envelope.events, clipboard_enabled, |text| {
+            app.clipboard().write_text(text).map_err(|_| ())?;
+            let mut current = clipboard_hash.lock().map_err(|_| ())?;
+            *current = Some(clipboard_digest(text));
+            Ok(())
+        });
+    let (mut acknowledged_event_ids, delivered_notifications, notification_failures) =
         deliver_notifications(&envelope.events, |notification| {
             app.notification()
                 .builder()
@@ -531,6 +565,7 @@ async fn send_heartbeat(app: &AppHandle, offers: &OfferStore) -> Result<Heartbea
                 .show()
                 .map_err(|_| ())
         });
+    acknowledged_event_ids.append(&mut clipboard_event_ids);
 
     let envelope = if acknowledged_event_ids.is_empty() {
         envelope
@@ -551,7 +586,19 @@ async fn send_heartbeat(app: &AppHandle, offers: &OfferStore) -> Result<Heartbea
 pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
     let (wake, mut wake_requests) = mpsc::channel(1);
     let offers = Arc::new(Mutex::new(HashMap::new()));
+    let clipboard_hash = Arc::new(Mutex::new(None));
+    let initial_clipboard_enabled = identity::load_profile()
+        .ok()
+        .flatten()
+        .and_then(|profile| identity::clipboard_sync_enabled(&profile.server_id).ok())
+        .unwrap_or(false);
+    let clipboard_enabled = Arc::new(AtomicBool::new(initial_clipboard_enabled));
     let worker_offers = Arc::clone(&offers);
+    let worker_clipboard_hash = Arc::clone(&clipboard_hash);
+    let worker_clipboard_enabled = Arc::clone(&clipboard_enabled);
+    let clipboard_app = app.clone();
+    let polling_clipboard_hash = Arc::clone(&clipboard_hash);
+    let polling_clipboard_enabled = Arc::clone(&clipboard_enabled);
     tauri::async_runtime::spawn(async move {
         let mut failures = 0_u32;
 
@@ -565,7 +612,13 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
                     break;
                 }
 
-                let result = send_heartbeat(&app, &worker_offers).await;
+                let result = send_heartbeat(
+                    &app,
+                    &worker_offers,
+                    &worker_clipboard_hash,
+                    worker_clipboard_enabled.load(Ordering::Relaxed),
+                )
+                .await;
                 let delay = match result {
                     Ok(status) => {
                         failures = 0;
@@ -612,12 +665,153 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
             }
         }
     });
-    HeartbeatService { wake, offers }
+    tauri::async_runtime::spawn(async move {
+        let mut context: Option<(String, bool)> = None;
+        loop {
+            sleep(Duration::from_millis(CLIPBOARD_POLL_MILLISECONDS)).await;
+            let Some(profile) = identity::load_profile().ok().flatten() else {
+                context = None;
+                polling_clipboard_enabled.store(false, Ordering::Relaxed);
+                continue;
+            };
+            let enabled = polling_clipboard_enabled.load(Ordering::Relaxed);
+            let next_context = (profile.server_id.clone(), enabled);
+            if context.as_ref() != Some(&next_context) {
+                if let Ok(text) = clipboard_app.clipboard().read_text()
+                    && let Ok(mut current) = polling_clipboard_hash.lock()
+                {
+                    *current = Some(clipboard_digest(&text));
+                }
+                context = Some(next_context);
+                continue;
+            }
+            if !enabled {
+                continue;
+            }
+            let Ok(text) = clipboard_app.clipboard().read_text() else {
+                continue;
+            };
+            if !valid_clipboard_text(&text) {
+                continue;
+            }
+            let digest = clipboard_digest(&text);
+            let changed = if let Ok(mut current) = polling_clipboard_hash.lock() {
+                if current.as_deref() == Some(digest.as_str()) {
+                    false
+                } else {
+                    *current = Some(digest);
+                    true
+                }
+            } else {
+                false
+            };
+            if !changed {
+                continue;
+            }
+            let Ok(credential) = identity::load_credential(&profile.server_id) else {
+                continue;
+            };
+            let _ = relay_clipboard_update(&profile, credential.as_str(), &text).await;
+        }
+    });
+    HeartbeatService {
+        wake,
+        offers,
+        clipboard_hash,
+        clipboard_enabled,
+    }
 }
 
 #[tauri::command]
 pub fn request_heartbeat(service: State<'_, HeartbeatService>) {
     service.wake();
+}
+
+#[tauri::command]
+pub fn clipboard_sync_status() -> Result<ClipboardSyncStatus, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    Ok(ClipboardSyncStatus {
+        enabled: identity::clipboard_sync_enabled(&profile.server_id)?,
+    })
+}
+
+#[tauri::command]
+pub fn set_clipboard_sync(
+    app: AppHandle,
+    enabled: bool,
+    service: State<'_, HeartbeatService>,
+) -> Result<ClipboardSyncStatus, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    identity::store_clipboard_sync(&profile.server_id, enabled)?;
+    service.clipboard_enabled.store(enabled, Ordering::Relaxed);
+    let current = app.clipboard().read_text().unwrap_or_default();
+    *service
+        .clipboard_hash
+        .lock()
+        .map_err(|_| "Could not update clipboard synchronisation state.".to_string())? =
+        Some(clipboard_digest(&current));
+    service.wake();
+    Ok(ClipboardSyncStatus { enabled })
+}
+
+fn deliver_clipboard_updates<F>(
+    events: &[HeartbeatEvent],
+    enabled: bool,
+    mut write: F,
+) -> Vec<String>
+where
+    F: FnMut(&str) -> Result<(), ()>,
+{
+    if !enabled {
+        return Vec::new();
+    }
+    events
+        .iter()
+        .filter_map(|event| {
+            if event.kind != "clipboard.offer" {
+                return None;
+            }
+            let text = event.payload.get("text")?.as_str()?;
+            if !valid_clipboard_text(text) || write(text).is_err() {
+                return None;
+            }
+            Some(event.id.clone())
+        })
+        .collect()
+}
+
+fn valid_clipboard_text(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= 8_000
+        && !value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+}
+
+fn clipboard_digest(value: &str) -> String {
+    format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+
+async fn relay_clipboard_update(
+    profile: &StoredProfile,
+    credential: &str,
+    text: &str,
+) -> Result<(), String> {
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/clipboard")
+        .map_err(|_| "Could not create the clipboard relay address.".to_string())?;
+    let response = http_client()?
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential)
+        .json(&serde_json::json!({ "text": text }))
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    ensure_success(&response, "clipboard relay")
 }
 
 fn heartbeat_retry_delay(failures: u32) -> Duration {
@@ -1087,6 +1281,12 @@ pub async fn disconnect_device(
     }
 
     identity::delete_profile(&profile.server_id)?;
+    let clipboard_enabled = identity::load_profile()?
+        .and_then(|next| identity::clipboard_sync_enabled(&next.server_id).ok())
+        .unwrap_or(false);
+    service
+        .clipboard_enabled
+        .store(clipboard_enabled, Ordering::Relaxed);
     crate::tray::refresh_menu(&app);
     service.wake();
     Ok(())
@@ -1451,6 +1651,30 @@ mod tests {
         assert!(acknowledged.is_empty());
         assert_eq!(delivered, 0);
         assert_eq!(failures, 1);
+    }
+
+    #[test]
+    fn seamless_clipboard_acknowledges_only_successful_exact_writes() {
+        let event = share_event(
+            "clipboard.offer",
+            serde_json::json!({ "text": "  copied text\n", "sourceName": "Phone" }),
+        );
+        let mut written = String::new();
+        let acknowledged = deliver_clipboard_updates(&[event], true, |text| {
+            written = text.to_owned();
+            Ok(())
+        });
+        assert_eq!(written, "  copied text\n");
+        assert_eq!(acknowledged, vec!["offer_123"]);
+        assert!(deliver_clipboard_updates(&[], false, |_| Ok(())).is_empty());
+    }
+
+    #[test]
+    fn clipboard_hash_suppresses_round_trips() {
+        assert_eq!(clipboard_digest("same"), clipboard_digest("same"));
+        assert_ne!(clipboard_digest("same"), clipboard_digest("different"));
+        assert!(valid_clipboard_text("line one\nline two"));
+        assert!(!valid_clipboard_text("secret\0text"));
     }
 
     #[test]
