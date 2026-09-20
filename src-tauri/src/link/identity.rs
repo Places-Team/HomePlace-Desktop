@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 const SERVICE: &str = "com.places-team.homeplace.desktop";
+const MAX_PROFILES: usize = 12;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,7 +22,7 @@ pub struct PendingPairing {
     pub device_name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredProfile {
     pub server_id: String,
@@ -43,7 +44,7 @@ pub fn public_key(server_id: &str) -> Result<String, String> {
             let secret = SecretKey::random(&mut OsRng);
             let document = secret
                 .to_pkcs8_der()
-                .map_err(|_| "Could not encode the device identity.".to_string())?;
+                .map_err(|_| "Could not encode device identity.".to_string())?;
             entry
                 .set_secret(document.as_bytes())
                 .map_err(|_| secure_storage_error())?;
@@ -59,13 +60,13 @@ fn encode_public_key(secret: &SecretKey) -> Result<String, String> {
     let public_document = secret
         .public_key()
         .to_public_key_der()
-        .map_err(|_| "Could not encode the device public key.".to_string())?;
+        .map_err(|_| "Could not encode device public key.".to_string())?;
     Ok(STANDARD.encode(public_document.as_bytes()))
 }
 
 pub fn store_pending(server_id: &str, pending: &PendingPairing) -> Result<(), String> {
     let encoded = serde_json::to_string(pending)
-        .map_err(|_| "Could not prepare the pairing session.".to_string())?;
+        .map_err(|_| "Could not prepare pairing session.".to_string())?;
     entry("pending", server_id)?
         .set_password(&encoded)
         .map_err(|_| secure_storage_error())
@@ -82,10 +83,7 @@ pub fn load_pending(server_id: &str) -> Result<PendingPairing, String> {
 }
 
 pub fn delete_pending(server_id: &str) -> Result<(), String> {
-    match entry("pending", server_id)?.delete_credential() {
-        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
-        Err(_) => Err(secure_storage_error()),
-    }
+    delete_entry(entry("pending", server_id)?)
 }
 
 pub fn store_credential(server_id: &str, credential: &str) -> Result<(), String> {
@@ -105,11 +103,9 @@ pub fn load_credential(server_id: &str) -> Result<Zeroizing<String>, String> {
 }
 
 pub fn store_profile(profile: &StoredProfile) -> Result<(), String> {
-    let encoded = serde_json::to_string(profile)
-        .map_err(|_| "Could not prepare the HomePlace server profile.".to_string())?;
-    active_profile_entry()?
-        .set_password(&encoded)
-        .map_err(|_| secure_storage_error())
+    let profiles = upsert_profile(load_profiles()?, profile.clone())?;
+    store_profiles(&profiles)?;
+    store_active_profile(profile)
 }
 
 pub fn load_profile() -> Result<Option<StoredProfile>, String> {
@@ -123,21 +119,94 @@ pub fn load_profile() -> Result<Option<StoredProfile>, String> {
     Ok(Some(profile))
 }
 
+pub fn load_profiles() -> Result<Vec<StoredProfile>, String> {
+    let encoded = match profiles_entry()?.get_password() {
+        Ok(value) => value,
+        Err(KeyringError::NoEntry) => return Ok(load_profile()?.into_iter().collect()),
+        Err(_) => return Err(secure_storage_error()),
+    };
+    let profiles: Vec<StoredProfile> = serde_json::from_str(&encoded)
+        .map_err(|_| "The stored HomePlace server list is invalid.".to_string())?;
+    if profiles.len() > MAX_PROFILES {
+        return Err("The stored HomePlace server list is too large.".into());
+    }
+    let mut server_ids = std::collections::HashSet::with_capacity(profiles.len());
+    if profiles
+        .iter()
+        .any(|profile| !server_ids.insert(profile.server_id.as_str()))
+    {
+        return Err("The stored HomePlace server list contains duplicates.".into());
+    }
+    Ok(profiles)
+}
+
+pub fn activate_profile(server_id: &str) -> Result<StoredProfile, String> {
+    let profile = load_profiles()?
+        .into_iter()
+        .find(|profile| profile.server_id == server_id)
+        .ok_or_else(|| "The selected HomePlace server profile was not found.".to_string())?;
+    store_active_profile(&profile)?;
+    Ok(profile)
+}
+
 pub fn delete_profile(server_id: &str) -> Result<(), String> {
+    let active = load_profile()?;
+    let mut profiles = load_profiles()?;
+    profiles.retain(|profile| profile.server_id != server_id);
+    store_profiles(&profiles)?;
+
+    if active
+        .as_ref()
+        .is_some_and(|profile| profile.server_id == server_id)
+    {
+        if let Some(next) = profiles.first() {
+            store_active_profile(next)?;
+        } else {
+            delete_entry(active_profile_entry()?)?;
+        }
+    }
+
     let mut failed = false;
     for kind in ["pending", "credential", "identity"] {
         if delete_entry(entry(kind, server_id)?).is_err() {
             failed = true;
         }
     }
-    if delete_entry(active_profile_entry()?).is_err() {
-        failed = true;
-    }
     if failed {
         Err("Some HomePlace credentials could not be removed from secure storage.".into())
     } else {
         Ok(())
     }
+}
+
+fn store_profiles(profiles: &[StoredProfile]) -> Result<(), String> {
+    let encoded = serde_json::to_string(profiles)
+        .map_err(|_| "Could not prepare HomePlace server list.".to_string())?;
+    profiles_entry()?
+        .set_password(&encoded)
+        .map_err(|_| secure_storage_error())
+}
+
+fn upsert_profile(
+    mut profiles: Vec<StoredProfile>,
+    profile: StoredProfile,
+) -> Result<Vec<StoredProfile>, String> {
+    profiles.retain(|stored| stored.server_id != profile.server_id);
+    if profiles.len() >= MAX_PROFILES {
+        return Err(format!(
+            "HomePlace Desktop supports up to {MAX_PROFILES} paired servers."
+        ));
+    }
+    profiles.push(profile);
+    Ok(profiles)
+}
+
+fn store_active_profile(profile: &StoredProfile) -> Result<(), String> {
+    let encoded = serde_json::to_string(profile)
+        .map_err(|_| "Could not prepare HomePlace server profile.".to_string())?;
+    active_profile_entry()?
+        .set_password(&encoded)
+        .map_err(|_| secure_storage_error())
 }
 
 fn entry(kind: &str, server_id: &str) -> Result<Entry, String> {
@@ -147,6 +216,11 @@ fn entry(kind: &str, server_id: &str) -> Result<Entry, String> {
 
 fn active_profile_entry() -> Result<Entry, String> {
     Entry::new(SERVICE, "active-profile")
+        .map_err(|_| "Could not open platform secure storage.".to_string())
+}
+
+fn profiles_entry() -> Result<Entry, String> {
+    Entry::new(SERVICE, "profiles")
         .map_err(|_| "Could not open platform secure storage.".to_string())
 }
 
@@ -174,5 +248,37 @@ mod tests {
 
         assert_eq!(document.len(), 91);
         assert!(p256::PublicKey::from_public_key_der(&document).is_ok());
+    }
+
+    fn profile(index: usize) -> StoredProfile {
+        StoredProfile {
+            server_id: format!("server-{index}"),
+            server_name: format!("Home {index}"),
+            address: format!("https://home-{index}.example"),
+            device_id: format!("device-{index}"),
+            device_name: "Desktop".into(),
+        }
+    }
+
+    #[test]
+    fn replaces_existing_profile_without_reordering_other_servers() {
+        let profiles = vec![profile(1), profile(2)];
+        let mut replacement = profile(1);
+        replacement.server_name = "Updated Home".into();
+
+        let profiles = upsert_profile(profiles, replacement.clone()).unwrap();
+
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0], profile(2));
+        assert_eq!(profiles[1], replacement);
+    }
+
+    #[test]
+    fn enforces_the_paired_server_limit() {
+        let profiles = (0..MAX_PROFILES).map(profile).collect();
+
+        let error = upsert_profile(profiles, profile(MAX_PROFILES + 1)).unwrap_err();
+
+        assert!(error.contains("up to 12"));
     }
 }

@@ -49,9 +49,11 @@ acknowledged only after local delivery. Revocation, secure local forgetting and
 credential cleanup are also supported. The native tray keeps Link active after
 the window closes, and the Rust heartbeat service continues independently of
 the interface. Users can explicitly enable start-at-login, which launches Link
-hidden in the tray without enabling itself by default. Multiple server profiles
-and realtime transport are the next milestones. A second launch reuses the
-existing process, opens its window and requests an immediate reconnect.
+hidden in the tray without enabling itself by default. Multiple HomePlace
+servers can now be paired concurrently, switched from the window or tray and
+forgotten independently without exposing their credentials. Realtime transport
+is the next connection milestone. A second launch reuses the existing process,
+opens its window and requests an immediate reconnect.
 
 The first functional milestone is pairing with a HomePlace server, storing the
 device credential securely and reporting presence from the system tray.

@@ -59,6 +59,13 @@ pub struct PairingStatus {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ConnectionProfiles {
+    profiles: Vec<StoredProfile>,
+    active_server_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HeartbeatStatus {
     server_time: String,
     pending_events: usize,
@@ -287,7 +294,7 @@ pub async fn start_pairing(
 }
 
 #[tauri::command]
-pub async fn poll_pairing(server_id: String) -> Result<PairingStatus, String> {
+pub async fn poll_pairing(app: AppHandle, server_id: String) -> Result<PairingStatus, String> {
     if uuid::Uuid::parse_str(&server_id).is_err() {
         return Err("The stored HomePlace server identity is invalid.".into());
     }
@@ -361,6 +368,7 @@ pub async fn poll_pairing(server_id: String) -> Result<PairingStatus, String> {
                 device_id: device_id.clone(),
                 device_name: pending.device_name,
             })?;
+            crate::tray::refresh_menu(&app);
             identity::delete_pending(&server_id)?;
             Ok(PairingStatus {
                 status: "approved".into(),
@@ -390,6 +398,70 @@ pub fn connection_profile() -> Result<Option<StoredProfile>, String> {
     validate_stored_profile(&profile)?;
     identity::load_credential(&profile.server_id)?;
     Ok(Some(profile))
+}
+
+#[tauri::command]
+pub fn connection_profiles() -> Result<ConnectionProfiles, String> {
+    let profiles = identity::load_profiles()?;
+    for profile in &profiles {
+        validate_stored_profile(profile)?;
+        identity::load_credential(&profile.server_id)?;
+    }
+
+    let active = identity::load_profile()?;
+    let active_server_id = match active {
+        Some(profile) => {
+            validate_stored_profile(&profile)?;
+            if !profiles
+                .iter()
+                .any(|stored| stored.server_id == profile.server_id)
+            {
+                return Err("The active HomePlace server is missing from the server list.".into());
+            }
+            Some(profile.server_id)
+        }
+        None if profiles.is_empty() => None,
+        None => return Err("The active HomePlace server profile is missing.".into()),
+    };
+
+    Ok(ConnectionProfiles {
+        profiles,
+        active_server_id,
+    })
+}
+
+#[tauri::command]
+pub fn activate_profile(
+    app: AppHandle,
+    server_id: String,
+    service: State<'_, HeartbeatService>,
+) -> Result<StoredProfile, String> {
+    let profile = activate_stored_profile(&server_id)?;
+    crate::tray::refresh_menu(&app);
+    service.wake();
+    Ok(profile)
+}
+
+pub(crate) fn activate_stored_profile(server_id: &str) -> Result<StoredProfile, String> {
+    if uuid::Uuid::parse_str(server_id).is_err() {
+        return Err("The selected HomePlace server ID is invalid.".into());
+    }
+    let profile = identity::load_profiles()?
+        .into_iter()
+        .find(|profile| profile.server_id == server_id)
+        .ok_or_else(|| "The selected HomePlace server profile was not found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    identity::load_credential(&profile.server_id)?;
+    identity::activate_profile(server_id)?;
+    Ok(profile)
+}
+
+#[tauri::command]
+pub fn cancel_pairing(server_id: String) -> Result<(), String> {
+    if uuid::Uuid::parse_str(&server_id).is_err() {
+        return Err("The HomePlace server ID is invalid.".into());
+    }
+    identity::delete_pending(&server_id)
 }
 
 async fn send_heartbeat(app: &AppHandle) -> Result<HeartbeatStatus, String> {
@@ -581,6 +653,7 @@ fn bounded_notification_text(value: &str, maximum: usize) -> Result<String, ()> 
 
 #[tauri::command]
 pub async fn disconnect_device(
+    app: AppHandle,
     revoke: bool,
     service: State<'_, HeartbeatService>,
 ) -> Result<(), String> {
@@ -606,6 +679,7 @@ pub async fn disconnect_device(
     }
 
     identity::delete_profile(&profile.server_id)?;
+    crate::tray::refresh_menu(&app);
     service.wake();
     Ok(())
 }

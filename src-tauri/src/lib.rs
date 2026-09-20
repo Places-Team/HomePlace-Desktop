@@ -78,6 +78,9 @@ pub fn run() {
             link::client::start_pairing,
             link::client::poll_pairing,
             link::client::connection_profile,
+            link::client::connection_profiles,
+            link::client::activate_profile,
+            link::client::cancel_pairing,
             link::client::request_heartbeat,
             link::client::disconnect_device
         ])

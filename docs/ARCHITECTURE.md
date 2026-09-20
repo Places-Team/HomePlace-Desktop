@@ -78,9 +78,11 @@ Initial adapters cover:
 ## Connection profiles
 
 A profile stores the HomePlace server ID, a preferred public or LAN URL,
-certificate trust information and a reference to the device credential. The
-first release activates one profile at a time while keeping the data model
-ready for multiple HomePlace installations.
+certificate trust information and a reference to the device credential. One
+profile is active at a time, while up to twelve paired HomePlace installations
+retain separate device identities and credentials. The active profile can be
+switched from the main window or tray without restarting the application.
+Existing single-profile installations migrate without requiring a new pairing.
 
 Plain HTTP is allowed only for loopback and local-network addresses and is
 always shown as a reduced-security connection. Cross-host redirects require a
@@ -107,4 +109,3 @@ The shared core uses deterministic protocol fixtures and simulated transports.
 Platform adapters have contract tests plus a small real-machine test matrix.
 UI tests run once against shared content and separately for each platform shell.
 Release candidates must pair with both LAN-only and HTTPS HomePlace servers.
-
