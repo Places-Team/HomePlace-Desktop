@@ -103,6 +103,36 @@ struct RemindersEnvelope {
     reminders: Vec<ReminderSummary>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEventSummary {
+    id: String,
+    summary: String,
+    start: String,
+    end: String,
+    all_day: bool,
+    location: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarSummary {
+    status: String,
+    events: Vec<CalendarEventSummary>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarMutationInput {
+    summary: String,
+    start: String,
+    end: String,
+    all_day: bool,
+    location: Option<String>,
+    from: String,
+    to: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeartbeatStatus {
@@ -327,7 +357,7 @@ pub async fn start_pairing(
         },
         public_key,
         capabilities: initial_capabilities(),
-        permissions: vec!["reminder.manage"],
+        permissions: vec!["calendar.read", "calendar.manage", "reminder.manage"],
     };
 
     let base_url = Url::parse(&verified.address)
@@ -1276,6 +1306,154 @@ pub async fn list_reminders() -> Result<Vec<ReminderSummary>, String> {
 }
 
 #[tauri::command]
+pub async fn list_calendar_events(from: String, to: String) -> Result<CalendarSummary, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    fetch_calendar_events(&profile, credential.as_str(), &from, &to).await
+}
+
+async fn fetch_calendar_events(
+    profile: &StoredProfile,
+    credential: &str,
+    from: &str,
+    to: &str,
+) -> Result<CalendarSummary, String> {
+    validate_calendar_range(from, to)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let mut endpoint = base_url
+        .join("api/link/calendar")
+        .map_err(|_| "Could not create calendar API address.".to_string())?;
+    endpoint
+        .query_pairs_mut()
+        .append_pair("from", from)
+        .append_pair("to", to);
+    let response = http_client()?
+        .get(endpoint)
+        .bearer_auth(credential)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+
+    match response.status().as_u16() {
+        401 => return Err("HomePlace rejected the device credential. Pair this device again.".into()),
+        403 => return Err("Calendar access was not approved for this device. Pair it again and approve the requested permission.".into()),
+        _ => ensure_success(&response, "calendar")?,
+    }
+    let envelope: CalendarSummary = read_bounded_json(response).await?;
+    if !matches!(
+        envelope.status.as_str(),
+        "connected" | "not_connected" | "unavailable"
+    ) {
+        return Err("The HomePlace server returned an invalid calendar status.".into());
+    }
+    Ok(CalendarSummary {
+        status: envelope.status,
+        events: validate_calendar_events(envelope.events)?,
+    })
+}
+
+#[tauri::command]
+pub async fn create_calendar_event(
+    input: CalendarMutationInput,
+) -> Result<CalendarSummary, String> {
+    mutate_calendar_event(None, input).await
+}
+
+#[tauri::command]
+pub async fn update_calendar_event(
+    id: String,
+    input: CalendarMutationInput,
+) -> Result<CalendarSummary, String> {
+    if !safe_calendar_identifier(&id) {
+        return Err("The calendar event identifier is invalid.".into());
+    }
+    mutate_calendar_event(Some(id), input).await
+}
+
+#[tauri::command]
+pub async fn delete_calendar_event(
+    id: String,
+    from: String,
+    to: String,
+) -> Result<CalendarSummary, String> {
+    if !safe_calendar_identifier(&id) {
+        return Err("The calendar event identifier is invalid.".into());
+    }
+    mutate_calendar_request(
+        serde_json::json!({ "action": "delete", "id": id }),
+        from,
+        to,
+    )
+    .await
+}
+
+async fn mutate_calendar_event(
+    id: Option<String>,
+    input: CalendarMutationInput,
+) -> Result<CalendarSummary, String> {
+    let summary = input.summary.trim().to_owned();
+    let location = input
+        .location
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let start_time = validate_calendar_time(&input.start, input.all_day)?;
+    let end_time = validate_calendar_time(&input.end, input.all_day)?;
+    if summary.is_empty()
+        || !safe_calendar_text(&summary, 300)
+        || location
+            .as_deref()
+            .is_some_and(|value| !safe_calendar_text(value, 300))
+        || end_time <= start_time
+    {
+        return Err("The calendar event details are invalid.".into());
+    }
+    mutate_calendar_request(
+        serde_json::json!({
+            "action": if id.is_some() { "update" } else { "create" },
+            "id": id,
+            "summary": summary,
+            "start": input.start,
+            "end": input.end,
+            "allDay": input.all_day,
+            "location": location,
+        }),
+        input.from,
+        input.to,
+    )
+    .await
+}
+
+async fn mutate_calendar_request(
+    body: serde_json::Value,
+    from: String,
+    to: String,
+) -> Result<CalendarSummary, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/calendar")
+        .map_err(|_| "Could not create calendar API address.".to_string())?;
+    let response = http_client()?
+        .post(endpoint)
+        .bearer_auth(credential.as_str())
+        .header("Accept", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    match response.status().as_u16() {
+        401 => return Err("HomePlace rejected the device credential. Pair this device again.".into()),
+        403 => return Err("Calendar changes were not approved for this device. Pair it again and approve the requested permission.".into()),
+        _ => ensure_success(&response, "calendar change")?,
+    }
+    fetch_calendar_events(&profile, credential.as_str(), &from, &to).await
+}
+
+#[tauri::command]
 pub async fn create_reminder(
     title: String,
     at: String,
@@ -1286,6 +1464,29 @@ pub async fn create_reminder(
     validate_reminder_repeat(&repeat)?;
     mutate_reminders(serde_json::json!({
         "action": "create",
+        "title": title,
+        "at": at,
+        "repeat": repeat,
+    }))
+    .await
+}
+
+#[tauri::command]
+pub async fn update_reminder(
+    id: String,
+    title: String,
+    at: String,
+    repeat: String,
+) -> Result<Vec<ReminderSummary>, String> {
+    if !safe_identifier(&id) {
+        return Err("The reminder identifier is invalid.".into());
+    }
+    let title = validate_reminder_title(&title)?;
+    validate_reminder_time(&at)?;
+    validate_reminder_repeat(&repeat)?;
+    mutate_reminders(serde_json::json!({
+        "action": "update",
+        "id": id,
         "title": title,
         "at": at,
         "repeat": repeat,
@@ -1377,6 +1578,73 @@ fn validate_reminders(reminders: Vec<ReminderSummary>) -> Result<Vec<ReminderSum
         }
     }
     Ok(reminders)
+}
+
+fn validate_calendar_events(
+    events: Vec<CalendarEventSummary>,
+) -> Result<Vec<CalendarEventSummary>, String> {
+    if events.len() > 250 {
+        return Err("The HomePlace server returned too many calendar events.".into());
+    }
+    for event in &events {
+        let start = validate_calendar_time(&event.start, event.all_day)?;
+        let end = validate_calendar_time(&event.end, event.all_day)?;
+        if !safe_calendar_identifier(&event.id)
+            || !safe_calendar_text(&event.summary, 300)
+            || event
+                .location
+                .as_deref()
+                .is_some_and(|value| !safe_calendar_text(value, 300))
+            || end < start
+        {
+            return Err("The HomePlace server returned an invalid calendar event.".into());
+        }
+    }
+    Ok(events)
+}
+
+fn validate_calendar_time(value: &str, all_day: bool) -> Result<OffsetDateTime, String> {
+    let normalized = if all_day {
+        if value.len() != 10
+            || !value.bytes().enumerate().all(|(index, byte)| {
+                if matches!(index, 4 | 7) {
+                    byte == b'-'
+                } else {
+                    byte.is_ascii_digit()
+                }
+            })
+        {
+            return Err("The HomePlace server returned an invalid calendar date.".into());
+        }
+        format!("{value}T00:00:00Z")
+    } else {
+        value.to_owned()
+    };
+    OffsetDateTime::parse(&normalized, &Rfc3339)
+        .map_err(|_| "The HomePlace server returned an invalid calendar date.".to_string())
+}
+
+fn validate_calendar_range(from: &str, to: &str) -> Result<(), String> {
+    let from = OffsetDateTime::parse(from, &Rfc3339)
+        .map_err(|_| "The calendar range is invalid.".to_string())?;
+    let to = OffsetDateTime::parse(to, &Rfc3339)
+        .map_err(|_| "The calendar range is invalid.".to_string())?;
+    if to <= from || to - from > TimeDuration::days(93) {
+        return Err("The calendar range is invalid.".into());
+    }
+    Ok(())
+}
+
+fn safe_calendar_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn safe_calendar_text(value: &str, maximum: usize) -> bool {
+    value.chars().count() <= maximum && !value.chars().any(char::is_control)
 }
 
 fn validate_reminder_title(value: &str) -> Result<String, String> {
@@ -2018,6 +2286,29 @@ mod tests {
             repeat: "weekly".into(),
         };
         assert!(validate_reminders(vec![invalid]).is_err());
+    }
+
+    #[test]
+    fn validates_bounded_calendar_responses() {
+        let event = CalendarEventSummary {
+            id: "event_123".into(),
+            summary: "Planning".into(),
+            start: "2026-09-20T07:00:00.000Z".into(),
+            end: "2026-09-20T08:00:00.000Z".into(),
+            all_day: false,
+            location: Some("Office".into()),
+        };
+        assert_eq!(validate_calendar_events(vec![event]).unwrap().len(), 1);
+
+        let invalid = CalendarEventSummary {
+            id: "../event".into(),
+            summary: "Planning".into(),
+            start: "2026-09-21".into(),
+            end: "2026-09-20".into(),
+            all_day: true,
+            location: None,
+        };
+        assert!(validate_calendar_events(vec![invalid]).is_err());
     }
 
     fn notification_event(payload: serde_json::Value) -> HeartbeatEvent {

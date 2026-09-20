@@ -78,6 +78,20 @@ type Reminder = {
   repeat: string;
 };
 
+type CalendarEvent = {
+  id: string;
+  summary: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+  location?: string;
+};
+
+type CalendarSummary = {
+  status: "connected" | "not_connected" | "unavailable";
+  events: CalendarEvent[];
+};
+
 type AppSection =
   | "overview"
   | "devices"
@@ -132,6 +146,31 @@ function defaultReminderTime(): string {
   return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
 }
 
+function localDayKey(value: Date): string {
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
+
+function calendarEventDay(event: CalendarEvent): string {
+  return event.allDay ? event.start : localDayKey(new Date(event.start));
+}
+
+function localDateTimeInput(value: Date): string {
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${localDayKey(value)}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
+}
+
+function visibleCalendarRange(monthOffset: number): { from: string; to: string } {
+  const today = new Date();
+  const first = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
+  const start = new Date(first);
+  start.setDate(first.getDate() - ((first.getDay() + 6) % 7));
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 42);
+  return { from: start.toISOString(), to: end.toISOString() };
+}
+
 export function App() {
   const [activeSection, setActiveSection] = useState<AppSection>("overview");
   const [language, setLanguage] = useState<Language>(() => {
@@ -178,6 +217,21 @@ export function App() {
   const [reminderTitle, setReminderTitle] = useState("");
   const [reminderAt, setReminderAt] = useState(defaultReminderTime);
   const [reminderRepeat, setReminderRepeat] = useState("none");
+  const [editingReminderId, setEditingReminderId] = useState<string | null>(null);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  const [calendarStatus, setCalendarStatus] = useState<CalendarSummary["status"]>("not_connected");
+  const [calendarLoaded, setCalendarLoaded] = useState(false);
+  const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [calendarMonthOffset, setCalendarMonthOffset] = useState(0);
+  const [selectedCalendarDay, setSelectedCalendarDay] = useState(() => localDayKey(new Date()));
+  const [editingCalendarEventId, setEditingCalendarEventId] = useState<string | null>(null);
+  const [showCalendarForm, setShowCalendarForm] = useState(false);
+  const [calendarTitle, setCalendarTitle] = useState("");
+  const [calendarStart, setCalendarStart] = useState("");
+  const [calendarEnd, setCalendarEnd] = useState("");
+  const [calendarAllDay, setCalendarAllDay] = useState(false);
+  const [calendarLocation, setCalendarLocation] = useState("");
+  const [calendarBusy, setCalendarBusy] = useState(false);
 
   useEffect(() => {
     invoke<PlatformInfo>("platform_info")
@@ -365,6 +419,27 @@ export function App() {
   useEffect(() => {
     if (!activeServerId) return;
     let cancelled = false;
+    const range = visibleCalendarRange(calendarMonthOffset);
+    invoke<CalendarSummary>("list_calendar_events", range)
+      .then((result) => {
+        if (cancelled) return;
+        setCalendarEvents(result.events);
+        setCalendarStatus(result.status);
+      })
+      .catch((reason) => {
+        if (!cancelled) setCalendarError(errorMessage(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setCalendarLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeServerId, calendarMonthOffset]);
+
+  useEffect(() => {
+    if (!activeServerId) return;
+    let cancelled = false;
     invoke<Reminder[]>("list_reminders")
       .then((items) => {
         if (!cancelled) setReminders(items);
@@ -421,31 +496,40 @@ export function App() {
   const isAddingServer = state !== "connected" && profiles.length > 0;
   const ui = copy[language];
   const today = new Date();
-  const monthLabel = today.toLocaleDateString(language === "ru" ? "ru-RU" : "en-US", {
+  const calendarView = new Date(today.getFullYear(), today.getMonth() + calendarMonthOffset, 1);
+  const monthLabel = calendarView.toLocaleDateString(language === "ru" ? "ru-RU" : "en-US", {
     month: "long",
     year: "numeric",
   });
-  const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+  const firstDay = calendarView;
   const mondayOffset = (firstDay.getDay() + 6) % 7;
   const calendarDays = Array.from({ length: 42 }, (_, index) => {
     const value = new Date(
-      today.getFullYear(),
-      today.getMonth(),
+      calendarView.getFullYear(),
+      calendarView.getMonth(),
       index - mondayOffset + 1,
     );
     return {
-      key: value.toISOString(),
+      key: localDayKey(value),
       day: value.getDate(),
-      currentMonth: value.getMonth() === today.getMonth(),
+      currentMonth: value.getMonth() === calendarView.getMonth(),
       isToday: value.toDateString() === today.toDateString(),
+      eventCount: calendarEvents.filter((event) => calendarEventDay(event) === localDayKey(value)).length,
     };
   });
-  const todayReminders = reminders.filter(
-    (reminder) => new Date(reminder.at).toDateString() === today.toDateString(),
-  );
-  const upcomingReminders = reminders.filter(
-    (reminder) => new Date(reminder.at).toDateString() !== today.toDateString(),
-  );
+  const selectedCalendarEvents = calendarEvents
+    .filter((event) => calendarEventDay(event) === selectedCalendarDay)
+    .sort((left, right) => left.start.localeCompare(right.start));
+  const selectedCalendarDate = new Date(`${selectedCalendarDay}T12:00:00`);
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const startOfTomorrow = new Date(startOfToday);
+  startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+  const overdueReminders = reminders.filter((reminder) => new Date(reminder.at) < startOfToday);
+  const todayReminders = reminders.filter((reminder) => {
+    const at = new Date(reminder.at);
+    return at >= startOfToday && at < startOfTomorrow;
+  });
+  const upcomingReminders = reminders.filter((reminder) => new Date(reminder.at) >= startOfTomorrow);
 
   function clearConnectionHealth() {
     setLastHeartbeat(null);
@@ -455,6 +539,10 @@ export function App() {
     setNotificationFailures(0);
     setOffers([]);
     setOfferError(null);
+    setCalendarEvents([]);
+    setCalendarStatus("not_connected");
+    setCalendarLoaded(false);
+    setCalendarError(null);
   }
 
   function showProfile(profile: ConnectionProfile) {
@@ -667,7 +755,8 @@ export function App() {
     setReminderBusy(true);
     setReminderError(null);
     try {
-      const items = await invoke<Reminder[]>("create_reminder", {
+      const items = await invoke<Reminder[]>(editingReminderId ? "update_reminder" : "create_reminder", {
+        ...(editingReminderId ? { id: editingReminderId } : {}),
         title: reminderTitle,
         at: new Date(reminderAt).toISOString(),
         repeat: reminderRepeat,
@@ -676,11 +765,123 @@ export function App() {
       setReminderTitle("");
       setReminderAt(defaultReminderTime());
       setReminderRepeat("none");
+      setEditingReminderId(null);
       setAddingReminder(false);
     } catch (reason) {
       setReminderError(errorMessage(reason));
     } finally {
       setReminderBusy(false);
+    }
+  }
+
+  function editReminder(reminder: Reminder) {
+    setEditingReminderId(reminder.id);
+    setReminderTitle(reminder.title);
+    setReminderAt(localDateTimeInput(new Date(reminder.at)));
+    setReminderRepeat(reminder.repeat);
+    setAddingReminder(true);
+  }
+
+  function closeReminderForm() {
+    setAddingReminder(false);
+    setEditingReminderId(null);
+    setReminderTitle("");
+    setReminderAt(defaultReminderTime());
+    setReminderRepeat("none");
+  }
+
+  function createCalendarEventForSelectedDay() {
+    const start = new Date(`${selectedCalendarDay}T09:00:00`);
+    const end = new Date(start.getTime() + 60 * 60 * 1000);
+    setEditingCalendarEventId(null);
+    setCalendarTitle("");
+    setCalendarStart(localDateTimeInput(start));
+    setCalendarEnd(localDateTimeInput(end));
+    setCalendarAllDay(false);
+    setCalendarLocation("");
+    setCalendarError(null);
+    setShowCalendarForm(true);
+  }
+
+  function moveCalendarMonth(delta: number) {
+    setCalendarLoaded(false);
+    setCalendarError(null);
+    setCalendarMonthOffset((value) => value + delta);
+  }
+
+  function showCurrentCalendarMonth() {
+    setCalendarLoaded(false);
+    setCalendarError(null);
+    setCalendarMonthOffset(0);
+    setSelectedCalendarDay(localDayKey(new Date()));
+  }
+
+  function editCalendarEvent(event: CalendarEvent) {
+    setEditingCalendarEventId(event.id);
+    setCalendarTitle(event.summary);
+    setCalendarStart(event.allDay ? event.start : localDateTimeInput(new Date(event.start)));
+    setCalendarEnd(event.allDay ? event.end : localDateTimeInput(new Date(event.end)));
+    setCalendarAllDay(event.allDay);
+    setCalendarLocation(event.location ?? "");
+    setCalendarError(null);
+    setShowCalendarForm(true);
+  }
+
+  function changeCalendarAllDay(enabled: boolean) {
+    const day = calendarStart.slice(0, 10) || selectedCalendarDay;
+    setCalendarAllDay(enabled);
+    if (enabled) {
+      const next = new Date(`${day}T12:00:00`);
+      next.setDate(next.getDate() + 1);
+      setCalendarStart(day);
+      setCalendarEnd(localDayKey(next));
+    } else {
+      setCalendarStart(`${day}T09:00`);
+      setCalendarEnd(`${day}T10:00`);
+    }
+  }
+
+  async function submitCalendarEvent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!calendarTitle.trim() || !calendarStart || !calendarEnd || calendarBusy) return;
+    setCalendarBusy(true);
+    setCalendarError(null);
+    try {
+      const input = {
+        ...visibleCalendarRange(calendarMonthOffset),
+        summary: calendarTitle,
+        start: calendarAllDay ? calendarStart : new Date(calendarStart).toISOString(),
+        end: calendarAllDay ? calendarEnd : new Date(calendarEnd).toISOString(),
+        allDay: calendarAllDay,
+        location: calendarLocation || null,
+      };
+      const result = await invoke<CalendarSummary>(editingCalendarEventId ? "update_calendar_event" : "create_calendar_event", {
+        ...(editingCalendarEventId ? { id: editingCalendarEventId } : {}),
+        input,
+      });
+      setCalendarEvents(result.events);
+      setCalendarStatus(result.status);
+      setShowCalendarForm(false);
+      setEditingCalendarEventId(null);
+    } catch (reason) {
+      setCalendarError(errorMessage(reason));
+    } finally {
+      setCalendarBusy(false);
+    }
+  }
+
+  async function removeCalendarEvent(id: string) {
+    if (calendarBusy || !window.confirm(ui.productivity.deleteEventConfirm)) return;
+    setCalendarBusy(true);
+    setCalendarError(null);
+    try {
+      const result = await invoke<CalendarSummary>("delete_calendar_event", { id, ...visibleCalendarRange(calendarMonthOffset) });
+      setCalendarEvents(result.events);
+      setCalendarStatus(result.status);
+    } catch (reason) {
+      setCalendarError(errorMessage(reason));
+    } finally {
+      setCalendarBusy(false);
     }
   }
 
@@ -731,11 +932,23 @@ export function App() {
           </span>
           <button
             type="button"
+            className="reminder-edit"
+            aria-label={`${ui.productivity.edit}: ${reminder.title}`}
+            title={ui.productivity.edit}
+            disabled={reminderBusy}
+            onClick={() => editReminder(reminder)}
+          >
+            ···
+          </button>
+          <button
+            type="button"
             className="reminder-delete"
             aria-label={`${ui.productivity.delete}: ${reminder.title}`}
             title={ui.productivity.delete}
             disabled={reminderBusy}
-            onClick={() => void resolveReminder("delete_reminder", reminder.id)}
+            onClick={() => {
+              if (window.confirm(ui.productivity.deleteReminderConfirm)) void resolveReminder("delete_reminder", reminder.id);
+            }}
           >
             ×
           </button>
@@ -1250,9 +1463,9 @@ export function App() {
                   <h3>{monthLabel}</h3>
                 </div>
                 <div className="calendar-actions" aria-label="Calendar navigation preview">
-                  <button type="button" disabled aria-label="Previous month">‹</button>
-                  <button type="button" disabled>{ui.productivity.today}</button>
-                  <button type="button" disabled aria-label="Next month">›</button>
+                  <button type="button" onClick={() => moveCalendarMonth(-1)} aria-label={ui.productivity.previousMonth}>‹</button>
+                  <button type="button" onClick={showCurrentCalendarMonth}>{ui.productivity.today}</button>
+                  <button type="button" onClick={() => moveCalendarMonth(1)} aria-label={ui.productivity.nextMonth}>›</button>
                 </div>
               </div>
               <div className="calendar-weekdays" aria-hidden>
@@ -1266,33 +1479,68 @@ export function App() {
                   <button
                     type="button"
                     key={day.key}
-                    className={`${day.currentMonth ? "" : "outside"} ${day.isToday ? "today" : ""}`}
-                    disabled
+                    className={`${day.currentMonth ? "" : "outside"} ${day.isToday ? "today" : ""} ${day.key === selectedCalendarDay ? "selected" : ""}`}
+                    onClick={() => setSelectedCalendarDay(day.key)}
                     aria-current={day.isToday ? "date" : undefined}
+                    aria-label={`${day.key}${day.eventCount ? `, ${day.eventCount} ${ui.productivity.events}` : ""}`}
                   >
                     {day.day}
+                    {day.eventCount > 0 && <i className="calendar-event-dot" aria-hidden />}
                   </button>
                 ))}
               </div>
               <div className="calendar-source-row">
-                <span><i className="source-dot personal" />Personal</span>
-                <span><i className="source-dot home" />HomePlace</span>
-                <small>{ui.productivity.calendarSources}</small>
+                <span><i className={`source-dot personal ${calendarStatus === "connected" ? "connected" : ""}`} />{ui.productivity.googleCalendar}</span>
+                <small>{calendarStatus === "connected" ? ui.productivity.calendarConnected : calendarStatus === "unavailable" ? ui.productivity.calendarUnavailable : ui.productivity.calendarNotConnected}</small>
               </div>
+              {showCalendarForm && (
+                <form className="calendar-form" onSubmit={submitCalendarEvent}>
+                  <input value={calendarTitle} onChange={(event) => setCalendarTitle(event.target.value)} placeholder={ui.productivity.eventTitle} maxLength={300} autoFocus required />
+                  <input value={calendarLocation} onChange={(event) => setCalendarLocation(event.target.value)} placeholder={ui.productivity.location} maxLength={300} />
+                  <label className="calendar-all-day"><input type="checkbox" checked={calendarAllDay} onChange={(event) => changeCalendarAllDay(event.target.checked)} /> {ui.productivity.allDay}</label>
+                  <label><span>{ui.productivity.starts}</span><input type={calendarAllDay ? "date" : "datetime-local"} value={calendarStart} onChange={(event) => setCalendarStart(event.target.value)} required /></label>
+                  <label><span>{ui.productivity.ends}</span><input type={calendarAllDay ? "date" : "datetime-local"} value={calendarEnd} onChange={(event) => setCalendarEnd(event.target.value)} required /></label>
+                  <div className="calendar-form-actions">
+                    <button type="button" onClick={() => setShowCalendarForm(false)}>{ui.productivity.cancel}</button>
+                    <button type="submit" disabled={calendarBusy || !calendarTitle.trim()}>{editingCalendarEventId ? ui.productivity.save : ui.productivity.add}</button>
+                  </div>
+                </form>
+              )}
             </article>
 
             <aside className="productivity-side">
               <article className="glass-card agenda-card">
                 <div className="section-heading">
-                  <div><p className="eyebrow">{ui.productivity.today}</p><h3>{ui.productivity.agenda}</h3></div>
-                  <span>{today.getDate()}</span>
+                  <div><p className="eyebrow">{selectedCalendarDate.toLocaleDateString(language === "ru" ? "ru-RU" : "en-US", { weekday: "long" })}</p><h3>{ui.productivity.agenda}</h3></div>
+                  <span>{selectedCalendarDate.getDate()}</span>
                 </div>
-                <div className="agenda-empty">
-                  <span>□</span>
-                  <b>{ui.productivity.clear}</b>
-                  <p>{ui.productivity.clearHint}</p>
-                </div>
-                <button type="button" className="subtle-action" disabled><Icon name="plus" size={13} /> {ui.productivity.addEvent}</button>
+                {!activeServerId ? (
+                  <div className="agenda-empty"><span>□</span><b>{ui.productivity.calendarNotConnected}</b></div>
+                ) : !calendarLoaded ? (
+                  <div className="agenda-empty"><span>◌</span><b>{ui.productivity.calendarLoading}</b></div>
+                ) : calendarError ? (
+                  <div className="agenda-empty calendar-error"><span>!</span><b>{calendarError.includes("permission") || calendarError.includes("approved") ? ui.productivity.calendarPermission : ui.productivity.calendarUnavailable}</b></div>
+                ) : selectedCalendarEvents.length === 0 ? (
+                  <div className="agenda-empty">
+                    <span>□</span>
+                    <b>{ui.productivity.clear}</b>
+                    <p>{calendarStatus === "not_connected" ? ui.productivity.calendarNotConnected : ui.productivity.clearHint}</p>
+                  </div>
+                ) : (
+                  <div className="agenda-list">
+                    {selectedCalendarEvents.map((event) => (
+                      <div className="agenda-item" key={event.id}>
+                        <time>{event.allDay ? ui.productivity.allDay : new Date(event.start).toLocaleTimeString(language === "ru" ? "ru-RU" : "en-US", { hour: "2-digit", minute: "2-digit" })}</time>
+                        <span><b>{event.summary || ui.productivity.untitledEvent}</b>{event.location && <small>{event.location}</small>}</span>
+                        <div className="agenda-item-actions">
+                          <button type="button" disabled={calendarBusy} onClick={() => editCalendarEvent(event)}>{ui.productivity.edit}</button>
+                          <button type="button" disabled={calendarBusy} onClick={() => void removeCalendarEvent(event.id)}>{ui.productivity.delete}</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button type="button" className="subtle-action" disabled={!activeServerId || calendarBusy || calendarStatus !== "connected"} onClick={createCalendarEventForSelectedDay}><Icon name="plus" size={13} /> {ui.productivity.addEvent}</button>
               </article>
 
               <article className="glass-card focus-card">
@@ -1313,7 +1561,7 @@ export function App() {
                 type="button"
                 className="subtle-action"
                 disabled={!activeServerId || reminderBusy}
-                onClick={() => setAddingReminder((value) => !value)}
+                onClick={() => addingReminder ? closeReminderForm() : setAddingReminder(true)}
               >
                 <Icon name="plus" size={13} /> {addingReminder ? ui.productivity.cancel : ui.productivity.newReminder}
               </button>
@@ -1336,13 +1584,14 @@ export function App() {
                   <span>{ui.productivity.repeat}</span>
                   <select value={reminderRepeat} onChange={(event) => setReminderRepeat(event.target.value)}>
                     <option value="none">{ui.productivity.once}</option>
+                    <option value="hourly">{ui.productivity.hourly}</option>
                     <option value="daily">{ui.productivity.daily}</option>
                     <option value="weekly">{ui.productivity.weekly}</option>
                     <option value="monthly">{ui.productivity.monthly}</option>
                     <option value="yearly">{ui.productivity.yearly}</option>
                   </select>
                 </label>
-                <button type="submit" disabled={reminderBusy || !reminderTitle.trim()}>{ui.productivity.add}</button>
+                <button type="submit" disabled={reminderBusy || !reminderTitle.trim()}>{editingReminderId ? ui.productivity.save : ui.productivity.add}</button>
               </form>
             )}
             {reminderError && (
@@ -1351,6 +1600,10 @@ export function App() {
               </p>
             )}
             <div className="reminder-grid">
+              <div className="reminder-column overdue-column">
+                <b>{ui.productivity.overdue}</b>
+                {reminderRows(overdueReminders)}
+              </div>
               <div className="reminder-column">
                 <b>{ui.productivity.today}</b>
                 {reminderRows(todayReminders)}
