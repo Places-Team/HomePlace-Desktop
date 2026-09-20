@@ -1189,7 +1189,7 @@ export function App() {
                 </button>
               ))}
               {compatibleShareTargets.length === 0 && (
-                <p>{language === "ru" ? "Нет доступных устройств. Старое подключение может потребовать повторной привязки с разрешением share.relay." : "No available devices. An older pairing may need to be paired again with share.relay permission."}</p>
+                <p>{language === "ru" ? "Нет доступных устройств. Проверьте разрешение быстрой отправки в разделе «Устройства» HomePlace." : "No available devices. Check the quick-sharing permission in HomePlace Devices."}</p>
               )}
             </div>
             {quickShareSent && <p className="quick-share-success">{language === "ru" ? "Отправлено — ожидается подтверждение." : "Sent — waiting for approval."}</p>}

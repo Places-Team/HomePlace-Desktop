@@ -861,8 +861,7 @@ pub async fn list_share_targets() -> Result<Vec<ShareTarget>, String> {
         }
         403 => {
             return Err(
-                "Sharing was not approved for this device. Pair it again and approve sharing."
-                    .into(),
+                "Quick sharing is disabled for this device. Enable it in HomePlace Devices.".into(),
             );
         }
         _ => ensure_success(&response, "share target list")?,
@@ -918,9 +917,9 @@ pub async fn send_share_text(
         .map_err(|error| connection_error(&error))?;
     match response.status().as_u16() {
         401 => Err("HomePlace rejected the device credential. Pair this device again.".into()),
-        403 => Err(
-            "Sharing was not approved for this device. Pair it again and approve sharing.".into(),
-        ),
+        403 => {
+            Err("Quick sharing is disabled for this device. Enable it in HomePlace Devices.".into())
+        }
         404 => Err("The selected device is no longer available.".into()),
         _ => ensure_success(&response, "content share"),
     }
@@ -977,9 +976,9 @@ pub async fn send_share_file(target_device_id: String, file_path: String) -> Res
         .map_err(|error| connection_error(&error))?;
     match response.status().as_u16() {
         401 => Err("HomePlace rejected the device credential. Pair this device again.".into()),
-        403 => Err(
-            "Sharing was not approved for this device. Pair it again and approve sharing.".into(),
-        ),
+        403 => {
+            Err("Quick sharing is disabled for this device. Enable it in HomePlace Devices.".into())
+        }
         404 => Err("The selected device is no longer available.".into()),
         413 => Err("The selected file is larger than 64 MiB.".into()),
         _ => ensure_success(&response, "file share"),
