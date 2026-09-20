@@ -13,6 +13,8 @@ describe("platform detection", () => {
       label: "macOS",
       secureStorage: "Keychain",
       tray: true,
+      deviceName: "HomePlace Mac",
+      platformVersion: "Unknown",
     });
   });
 });

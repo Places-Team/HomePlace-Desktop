@@ -98,7 +98,7 @@ body {
 .progress .active { color: var(--accent-strong); }
 .progress .active span { border-color: rgba(138,168,255,.5); background: rgba(138,168,255,.13); }
 
-.connect-form label { display: block; margin-bottom: 8px; color: rgba(246,247,251,.82); font-size: 12px; font-weight: 620; }
+.connect-form label, .pairing-form label { display: block; margin-bottom: 8px; color: rgba(246,247,251,.82); font-size: 12px; font-weight: 620; }
 .field-row { display: flex; gap: 10px; }
 .field-row input {
   min-width: 0;
@@ -164,6 +164,27 @@ body {
   letter-spacing: .04em;
   text-transform: uppercase;
 }
+
+.pairing-form {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.approval-card {
+  margin-top: 16px;
+  border: 1px solid rgba(138, 168, 255, .24);
+  border-radius: 16px;
+  background: rgba(89, 113, 191, .11);
+  padding: 20px;
+  text-align: center;
+}
+
+.approval-card p { margin: 7px 0; color: var(--muted); font-size: 12px; }
+.approval-card > span { color: rgba(235,239,248,.42); font-size: 11px; }
+.pairing-code { display: block; margin: 12px 0; font-size: 34px; letter-spacing: .22em; }
+.connected-card { border-color: rgba(126, 213, 168, .25); background: rgba(63, 142, 103, .1); }
+.connected-card strong { display: block; margin-top: 10px; color: rgba(232,255,243,.95); font-size: 16px; }
 
 .details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
 .detail-card { display: flex; min-height: 128px; gap: 14px; border-radius: 18px; padding: 20px; }

@@ -38,8 +38,10 @@ Phase 0 is complete and Phase 1 is in progress. The repository contains a
 working Tauri 2 shell, platform-specific visual treatments, Link protocol
 validators, capability boundaries and macOS/Windows/Linux CI checks. The
 connection form now verifies the live `/api/link/info` endpoint with strict
-address, identity, protocol, response-size and clock-skew checks. Device
-identity creation and the approval exchange are the next pairing milestone.
+address, identity, protocol, response-size and clock-skew checks. It now creates
+a P-256 device identity in platform secure storage, submits a bounded pairing
+request, polls for approval and stores the one-time device credential without
+exposing secrets to the interface. Authenticated presence is the next milestone.
 
 The first functional milestone is pairing with a HomePlace server, storing the
 device credential securely and reporting presence from the system tray.

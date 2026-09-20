@@ -6,5 +6,7 @@ pub fn info() -> PlatformInfo {
         label: "Windows",
         secure_storage: "Credential Manager",
         tray: true,
+        device_name: super::device_name("Windows PC"),
+        platform_version: super::platform_version(),
     }
 }

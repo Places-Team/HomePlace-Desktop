@@ -29,7 +29,9 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             platform_info,
-            link::client::verify_server
+            link::client::verify_server,
+            link::client::start_pairing,
+            link::client::poll_pairing
         ])
         .run(tauri::generate_context!())
         .expect("failed to run HomePlace Desktop");
