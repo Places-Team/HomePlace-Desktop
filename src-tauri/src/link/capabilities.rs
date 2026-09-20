@@ -11,7 +11,11 @@ pub struct Capability {
 }
 
 pub fn initial_capabilities() -> Vec<Capability> {
-    Vec::new()
+    vec![Capability {
+        name: "device.presence",
+        version: 1,
+        constraints: BTreeMap::new(),
+    }]
 }
 
 #[cfg(test)]
@@ -21,7 +25,8 @@ mod tests {
     #[test]
     fn scaffold_advertises_only_implemented_capabilities() {
         let capabilities = initial_capabilities();
-        assert!(capabilities.is_empty());
+        assert_eq!(capabilities.len(), 1);
+        assert_eq!(capabilities[0].name, "device.presence");
         assert!(!capabilities.iter().any(|item| item.name == "system.shell"));
     }
 }

@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 
 use super::{
     capabilities::initial_capabilities,
-    identity::{self, PendingPairing},
+    identity::{self, PendingPairing, StoredProfile},
     protocol::{LinkInfo, PROTOCOL_MAX, ProtocolError, validate_link_info},
 };
 use crate::platform;
@@ -39,6 +39,13 @@ pub struct PairingSession {
 pub struct PairingStatus {
     status: String,
     device_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeartbeatStatus {
+    server_time: String,
+    pending_events: usize,
 }
 
 #[derive(Serialize)]
@@ -89,6 +96,27 @@ struct ClaimResult {
     server_id: Option<String>,
     device_id: Option<String>,
     credential: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HeartbeatEnvelope {
+    protocol: u16,
+    server_id: String,
+    server_time: String,
+    events: Vec<HeartbeatEvent>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HeartbeatEvent {
+    protocol: u16,
+    id: String,
+    #[serde(rename = "type")]
+    kind: String,
+    device_id: String,
+    sent_at: String,
+    payload: serde_json::Value,
 }
 
 #[tauri::command]
@@ -203,6 +231,8 @@ pub async fn start_pairing(
             claim_secret: envelope.pairing.claim_secret.clone(),
             expires_at: envelope.pairing.expires_at.clone(),
             address: verified.address,
+            server_name: verified.server_name,
+            device_name: request.device.name,
         },
     )?;
 
@@ -281,6 +311,13 @@ pub async fn poll_pairing(server_id: String) -> Result<PairingStatus, String> {
                 })?;
 
             identity::store_credential(&server_id, &credential)?;
+            identity::store_profile(&StoredProfile {
+                server_id: server_id.clone(),
+                server_name: pending.server_name,
+                address: pending.address,
+                device_id: device_id.clone(),
+                device_name: pending.device_name,
+            })?;
             identity::delete_pending(&server_id)?;
             Ok(PairingStatus {
                 status: "approved".into(),
@@ -300,6 +337,76 @@ pub async fn poll_pairing(server_id: String) -> Result<PairingStatus, String> {
         }
         _ => Err("The HomePlace server returned an unknown pairing status.".into()),
     }
+}
+
+#[tauri::command]
+pub fn connection_profile() -> Result<Option<StoredProfile>, String> {
+    let Some(profile) = identity::load_profile()? else {
+        return Ok(None);
+    };
+    validate_stored_profile(&profile)?;
+    identity::load_credential(&profile.server_id)?;
+    Ok(Some(profile))
+}
+
+#[tauri::command]
+pub async fn send_heartbeat() -> Result<HeartbeatStatus, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/heartbeat")
+        .map_err(|_| "Could not create the heartbeat API address.".to_string())?;
+    let response = http_client()?
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .json(&serde_json::json!({
+            "protocol": PROTOCOL_MAX,
+            "acknowledgedEventIds": []
+        }))
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+
+    if response.status().as_u16() == 401 {
+        return Err("HomePlace rejected this device credential. Pair the device again.".into());
+    }
+    ensure_success(&response, "heartbeat")?;
+    let envelope: HeartbeatEnvelope = read_bounded_json(response).await?;
+    validate_heartbeat(&envelope, &profile)?;
+    Ok(HeartbeatStatus {
+        server_time: envelope.server_time,
+        pending_events: envelope.events.len(),
+    })
+}
+
+#[tauri::command]
+pub async fn disconnect_device(revoke: bool) -> Result<(), String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+
+    if revoke {
+        let credential = identity::load_credential(&profile.server_id)?;
+        let (base_url, _) = validate_address(&profile.address)?;
+        let endpoint = base_url
+            .join("api/link/device")
+            .map_err(|_| "Could not create the device API address.".to_string())?;
+        let response = http_client()?
+            .delete(endpoint)
+            .bearer_auth(credential.as_str())
+            .send()
+            .await
+            .map_err(|error| connection_error(&error))?;
+        if response.status().as_u16() != 401 {
+            ensure_success(&response, "device revocation")?;
+        }
+    }
+
+    identity::delete_profile(&profile.server_id)
 }
 
 fn http_client() -> Result<Client, String> {
@@ -353,6 +460,54 @@ fn safe_identifier(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn validate_stored_profile(profile: &StoredProfile) -> Result<(), String> {
+    if uuid::Uuid::parse_str(&profile.server_id).is_err()
+        || !safe_identifier(&profile.device_id)
+        || bounded_device_name(&profile.server_name).is_err()
+        || bounded_device_name(&profile.device_name).is_err()
+        || validate_address(&profile.address).is_err()
+    {
+        return Err("The stored HomePlace server profile is invalid.".into());
+    }
+    Ok(())
+}
+
+fn validate_heartbeat(envelope: &HeartbeatEnvelope, profile: &StoredProfile) -> Result<(), String> {
+    if envelope.protocol != PROTOCOL_MAX
+        || envelope.server_id != profile.server_id
+        || envelope.events.len() > 50
+    {
+        return Err("The HomePlace server returned an invalid heartbeat.".into());
+    }
+    validate_server_time(&envelope.server_time)?;
+    for event in &envelope.events {
+        if event.protocol != PROTOCOL_MAX
+            || !safe_identifier(&event.id)
+            || event.device_id != profile.device_id
+            || event.kind.is_empty()
+            || event.kind.len() > 80
+            || OffsetDateTime::parse(&event.sent_at, &Rfc3339).is_err()
+            || !event.payload.is_object()
+        {
+            return Err("The HomePlace server returned an invalid device event.".into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_server_time(value: &str) -> Result<(), String> {
+    let server_time = OffsetDateTime::parse(value, &Rfc3339)
+        .map_err(|_| "The HomePlace server returned an invalid time.".to_string())?;
+    if (OffsetDateTime::now_utc() - server_time)
+        .whole_seconds()
+        .abs()
+        > 10 * 60
+    {
+        return Err("The server clock differs by more than 10 minutes.".into());
+    }
+    Ok(())
 }
 
 fn ensure_success(response: &Response, operation: &str) -> Result<(), String> {
@@ -524,6 +679,35 @@ mod tests {
         assert!(bounded_device_name(&"a".repeat(81)).is_err());
         assert!(bounded_device_name("Office\nMac").is_err());
         assert!(!safe_identifier("../pairing"));
+    }
+
+    #[test]
+    fn validates_heartbeat_identity_and_events() {
+        let profile = StoredProfile {
+            server_id: "e54f9bfa-2543-4be2-bc07-c1eb3d0947ee".into(),
+            server_name: "HomePlace".into(),
+            address: "https://home.example.net".into(),
+            device_id: "device_123".into(),
+            device_name: "Studio Mac".into(),
+        };
+        let mut heartbeat = HeartbeatEnvelope {
+            protocol: PROTOCOL_MAX,
+            server_id: profile.server_id.clone(),
+            server_time: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
+            events: vec![HeartbeatEvent {
+                protocol: PROTOCOL_MAX,
+                id: "event_123".into(),
+                kind: "notification.deliver".into(),
+                device_id: profile.device_id.clone(),
+                sent_at: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
+                payload: serde_json::json!({ "title": "HomePlace" }),
+            }],
+        };
+
+        assert!(validate_stored_profile(&profile).is_ok());
+        assert!(validate_heartbeat(&heartbeat, &profile).is_ok());
+        heartbeat.server_id = "e54f9bfa-2543-4be2-bc07-c1eb3d0947ef".into();
+        assert!(validate_heartbeat(&heartbeat, &profile).is_err());
     }
 
     #[test]

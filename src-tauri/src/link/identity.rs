@@ -17,6 +17,18 @@ pub struct PendingPairing {
     pub claim_secret: String,
     pub expires_at: String,
     pub address: String,
+    pub server_name: String,
+    pub device_name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredProfile {
+    pub server_id: String,
+    pub server_name: String,
+    pub address: String,
+    pub device_id: String,
+    pub device_name: String,
 }
 
 pub fn public_key(server_id: &str) -> Result<String, String> {
@@ -82,9 +94,67 @@ pub fn store_credential(server_id: &str, credential: &str) -> Result<(), String>
         .map_err(|_| secure_storage_error())
 }
 
+pub fn load_credential(server_id: &str) -> Result<Zeroizing<String>, String> {
+    entry("credential", server_id)?
+        .get_password()
+        .map(Zeroizing::new)
+        .map_err(|error| match error {
+            KeyringError::NoEntry => "The HomePlace device credential is missing.".to_string(),
+            _ => secure_storage_error(),
+        })
+}
+
+pub fn store_profile(profile: &StoredProfile) -> Result<(), String> {
+    let encoded = serde_json::to_string(profile)
+        .map_err(|_| "Could not prepare the HomePlace server profile.".to_string())?;
+    active_profile_entry()?
+        .set_password(&encoded)
+        .map_err(|_| secure_storage_error())
+}
+
+pub fn load_profile() -> Result<Option<StoredProfile>, String> {
+    let encoded = match active_profile_entry()?.get_password() {
+        Ok(value) => value,
+        Err(KeyringError::NoEntry) => return Ok(None),
+        Err(_) => return Err(secure_storage_error()),
+    };
+    let profile: StoredProfile = serde_json::from_str(&encoded)
+        .map_err(|_| "The stored HomePlace server profile is invalid.".to_string())?;
+    Ok(Some(profile))
+}
+
+pub fn delete_profile(server_id: &str) -> Result<(), String> {
+    let mut failed = false;
+    for kind in ["pending", "credential", "identity"] {
+        if delete_entry(entry(kind, server_id)?).is_err() {
+            failed = true;
+        }
+    }
+    if delete_entry(active_profile_entry()?).is_err() {
+        failed = true;
+    }
+    if failed {
+        Err("Some HomePlace credentials could not be removed from secure storage.".into())
+    } else {
+        Ok(())
+    }
+}
+
 fn entry(kind: &str, server_id: &str) -> Result<Entry, String> {
     Entry::new(SERVICE, &format!("{kind}:{server_id}"))
         .map_err(|_| "Could not open platform secure storage.".to_string())
+}
+
+fn active_profile_entry() -> Result<Entry, String> {
+    Entry::new(SERVICE, "active-profile")
+        .map_err(|_| "Could not open platform secure storage.".to_string())
+}
+
+fn delete_entry(entry: Entry) -> Result<(), String> {
+    match entry.delete_credential() {
+        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+        Err(_) => Err(secure_storage_error()),
+    }
 }
 
 fn secure_storage_error() -> String {

@@ -185,6 +185,10 @@ body {
 .pairing-code { display: block; margin: 12px 0; font-size: 34px; letter-spacing: .22em; }
 .connected-card { border-color: rgba(126, 213, 168, .25); background: rgba(63, 142, 103, .1); }
 .connected-card strong { display: block; margin-top: 10px; color: rgba(232,255,243,.95); font-size: 16px; }
+.connected-card .heartbeat-error { color: #ffc2c8; }
+.connection-actions { display: flex; justify-content: center; gap: 8px; margin-top: 14px; }
+.connection-actions button { border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.04); padding: 7px 11px; color: var(--muted); font-size: 11px; }
+.connection-actions button:hover { border-color: rgba(255,255,255,.2); color: #fff; }
 
 .details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
 .detail-card { display: flex; min-height: 128px; gap: 14px; border-radius: 18px; padding: 20px; }

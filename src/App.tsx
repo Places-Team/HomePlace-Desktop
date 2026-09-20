@@ -29,6 +29,19 @@ type PairingStatus = {
   deviceId?: string;
 };
 
+type ConnectionProfile = {
+  serverId: string;
+  serverName: string;
+  address: string;
+  deviceId: string;
+  deviceName: string;
+};
+
+type HeartbeatStatus = {
+  serverTime: string;
+  pendingEvents: number;
+};
+
 const steps = ["Server", "Verify", "Approve", "Connected"];
 
 function errorMessage(error: unknown): string {
@@ -55,6 +68,9 @@ export function App() {
   const [pairing, setPairing] = useState<PairingSession | null>(null);
   const [pollAttempt, setPollAttempt] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [lastHeartbeat, setLastHeartbeat] = useState<Date | null>(null);
+  const [heartbeatError, setHeartbeatError] = useState<string | null>(null);
+  const [pendingEvents, setPendingEvents] = useState(0);
 
   useEffect(() => {
     invoke<PlatformInfo>("platform_info")
@@ -63,6 +79,24 @@ export function App() {
         setDeviceName((current) => current || info.deviceName);
       })
       .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    invoke<ConnectionProfile | null>("connection_profile")
+      .then((profile) => {
+        if (!profile) return;
+        setAddress(profile.address);
+        setDeviceName(profile.deviceName);
+        setServer({
+          address: profile.address,
+          serverId: profile.serverId,
+          serverName: profile.serverName,
+          realtime: false,
+          reducedSecurity: profile.address.startsWith("http://"),
+        });
+        setState("connected");
+      })
+      .catch((reason) => setError(errorMessage(reason)));
   }, []);
 
   useEffect(() => {
@@ -102,6 +136,30 @@ export function App() {
 
     return () => window.clearTimeout(timer);
   }, [pairing, pollAttempt, server, state]);
+
+  useEffect(() => {
+    if (state !== "connected") return;
+    let cancelled = false;
+
+    async function heartbeat() {
+      try {
+        const result = await invoke<HeartbeatStatus>("send_heartbeat");
+        if (cancelled) return;
+        setLastHeartbeat(new Date(result.serverTime));
+        setPendingEvents(result.pendingEvents);
+        setHeartbeatError(null);
+      } catch (reason) {
+        if (!cancelled) setHeartbeatError(errorMessage(reason));
+      }
+    }
+
+    void heartbeat();
+    const interval = window.setInterval(() => void heartbeat(), 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [state]);
 
   const current = progressIndex(state);
   const busy = state === "verifying" || state === "requesting";
@@ -144,6 +202,27 @@ export function App() {
     } catch (reason) {
       setError(errorMessage(reason));
       setState("verified");
+    }
+  }
+
+  async function disconnect(revoke: boolean) {
+    const message = revoke
+      ? "Disconnect this computer and revoke its HomePlace credential?"
+      : "Forget this server locally? The device will remain listed in HomePlace until revoked there.";
+    if (!window.confirm(message)) return;
+
+    try {
+      await invoke("disconnect_device", { revoke });
+      setState("not-configured");
+      setAddress("");
+      setServer(null);
+      setPairing(null);
+      setLastHeartbeat(null);
+      setHeartbeatError(null);
+      setPendingEvents(0);
+      setError(null);
+    } catch (reason) {
+      setHeartbeatError(errorMessage(reason));
     }
   }
 
@@ -251,7 +330,19 @@ export function App() {
           <section className="approval-card connected-card" aria-label="Connected">
             <p className="eyebrow">Connected</p>
             <strong>{deviceName} is paired with {server?.serverName}.</strong>
-            <p>The device credential is stored in {platform.secureStorage} and was never exposed to the interface.</p>
+            <p>The device credential is stored in {platform.secureStorage} and presence is reported every 30 seconds.</p>
+            {heartbeatError ? (
+              <span className="heartbeat-error">{heartbeatError}</span>
+            ) : (
+              <span>
+                {lastHeartbeat ? `Online · checked ${lastHeartbeat.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Connecting…"}
+                {pendingEvents > 0 ? ` · ${pendingEvents} pending event${pendingEvents === 1 ? "" : "s"}` : ""}
+              </span>
+            )}
+            <div className="connection-actions">
+              {heartbeatError && <button type="button" onClick={() => void disconnect(false)}>Forget locally</button>}
+              <button type="button" onClick={() => void disconnect(true)}>Disconnect</button>
+            </div>
           </section>
         )}
       </section>

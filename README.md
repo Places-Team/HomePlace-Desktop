@@ -41,7 +41,10 @@ connection form now verifies the live `/api/link/info` endpoint with strict
 address, identity, protocol, response-size and clock-skew checks. It now creates
 a P-256 device identity in platform secure storage, submits a bounded pairing
 request, polls for approval and stores the one-time device credential without
-exposing secrets to the interface. Authenticated presence is the next milestone.
+exposing secrets to the interface. The active profile is restored after restart
+and reports authenticated presence to HomePlace every 30 seconds. Revocation,
+secure local forgetting and credential cleanup are also supported. Multiple
+server profiles and device event handling are the next milestones.
 
 The first functional milestone is pairing with a HomePlace server, storing the
 device credential securely and reporting presence from the system tray.

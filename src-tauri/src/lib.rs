@@ -31,7 +31,10 @@ pub fn run() {
             platform_info,
             link::client::verify_server,
             link::client::start_pairing,
-            link::client::poll_pairing
+            link::client::poll_pairing,
+            link::client::connection_profile,
+            link::client::send_heartbeat,
+            link::client::disconnect_device
         ])
         .run(tauri::generate_context!())
         .expect("failed to run HomePlace Desktop");

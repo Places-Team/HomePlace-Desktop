@@ -23,8 +23,10 @@ application opens a platform-specific shell without network access.
 ## Phase 1 — server profiles and secure pairing
 
 Current progress: live server verification, P-256 device identity, approval
-polling and credential persistence are implemented. Restart recovery, server
-profiles and authenticated presence remain.
+polling, credential persistence, active-profile restart recovery and
+authenticated heartbeat presence are implemented. Multiple profiles,
+device event handling and reconnect backoff remain; revocation and local
+forget-server recovery are implemented.
 
 - Accept HTTPS domains, local hostnames, IPv4, IPv6 and HomePlace QR payloads.
 - Validate `/api/link/info`, server ID, protocol range, clock skew and TLS
