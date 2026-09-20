@@ -43,7 +43,9 @@ pub fn run() {
                 .args(["--hidden"])
                 .build(),
         )
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // Some Linux desktop environments do not provide a tray host. In
             // that case HomePlace keeps its normal close behaviour.
@@ -81,6 +83,7 @@ pub fn run() {
             link::client::connection_profiles,
             link::client::activate_profile,
             link::client::cancel_pairing,
+            link::client::resolve_share_offer,
             link::client::request_heartbeat,
             link::client::disconnect_device
         ])

@@ -217,6 +217,17 @@ body {
 .secondary-action { display: block; margin: 14px auto 0; }
 .connection-actions { flex-wrap: wrap; }
 .connection-actions button:disabled, .profile-heading button:disabled, .secondary-action:disabled { cursor: default; opacity: .5; }
+.pending-offers { display: grid; gap: 8px; margin-top: 16px; border-top: 1px solid rgba(255,255,255,.08); padding-top: 14px; text-align: left; }
+.offer-heading { display: flex; align-items: center; justify-content: space-between; color: rgba(232,255,243,.9); font-size: 11px; }
+.offer-heading > span { display: grid; min-width: 20px; height: 20px; place-items: center; border-radius: 999px; background: rgba(126,213,168,.14); color: #a9e9c7; }
+.offer-row { display: flex; align-items: center; gap: 8px; border: 1px solid rgba(255,255,255,.08); border-radius: 11px; background: rgba(0,0,0,.13); padding: 9px; }
+.offer-icon { display: grid; width: 28px; height: 28px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: rgba(138,168,255,.12); color: var(--accent-strong); font-size: 12px; font-weight: 750; }
+.offer-copy { display: grid; min-width: 0; flex: 1; gap: 2px; }
+.offer-copy b { color: rgba(246,247,251,.86); font-size: 11px; }
+.offer-copy small { overflow: hidden; color: rgba(235,239,248,.42); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.offer-row button { border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.04); padding: 6px 8px; color: var(--muted); font-size: 10px; }
+.offer-row button:first-of-type { border-color: rgba(126,213,168,.25); color: #bdebd3; }
+.offer-row button:disabled { opacity: .5; }
 
 .details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
 .detail-card { display: flex; min-height: 128px; gap: 14px; border-radius: 18px; padding: 20px; }

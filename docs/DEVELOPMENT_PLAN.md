@@ -64,8 +64,10 @@ realtime transport remain.
 - Receive native notifications with safe action routing. Basic validated
   notification delivery and post-delivery acknowledgement are implemented;
   notification actions remain.
-- Open validated HTTP and HTTPS URLs after applying the device policy.
-- Send and receive text clipboard offers with origin device and preview.
+- Open validated HTTP and HTTPS URLs after explicit local approval. The first
+  receive path is implemented without exposing the URL to React.
+- Send and receive text and clipboard offers with origin device preview. The
+  consent-gated receive and native clipboard-write path is implemented.
 - Require confirmation for background clipboard writes unless explicitly
   allowed for a trusted device.
 - Add per-capability enable, ask and deny policies.

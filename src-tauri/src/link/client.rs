@@ -1,10 +1,16 @@
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use futures_util::StreamExt;
 use reqwest::{Client, Response, redirect::Policy};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_opener::OpenerExt;
 use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{sync::mpsc, time::sleep};
 use url::{Host, Url};
@@ -24,6 +30,7 @@ const MAX_RETRY_SECONDS: u64 = 5 * 60;
 
 pub struct HeartbeatService {
     wake: mpsc::Sender<()>,
+    offers: OfferStore,
 }
 
 impl HeartbeatService {
@@ -71,6 +78,7 @@ pub struct HeartbeatStatus {
     pending_events: usize,
     delivered_notifications: usize,
     notification_failures: usize,
+    offers: Vec<ShareOfferSummary>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -85,6 +93,7 @@ enum HeartbeatUpdate {
         pending_events: usize,
         delivered_notifications: usize,
         notification_failures: usize,
+        offers: Vec<ShareOfferSummary>,
     },
     Failed {
         message: String,
@@ -97,6 +106,32 @@ struct NotificationContent {
     title: String,
     body: String,
 }
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareOfferSummary {
+    id: String,
+    kind: String,
+    source_name: String,
+    sent_at: String,
+}
+
+#[derive(Clone, Debug)]
+struct PendingShareOffer {
+    id: String,
+    server_id: String,
+    source_name: String,
+    sent_at: String,
+    content: ShareContent,
+}
+
+#[derive(Clone, Debug)]
+enum ShareContent {
+    Url(String),
+    Text(String),
+}
+
+type OfferStore = Arc<Mutex<HashMap<String, PendingShareOffer>>>;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -464,7 +499,7 @@ pub fn cancel_pairing(server_id: String) -> Result<(), String> {
     identity::delete_pending(&server_id)
 }
 
-async fn send_heartbeat(app: &AppHandle) -> Result<HeartbeatStatus, String> {
+async fn send_heartbeat(app: &AppHandle, offers: &OfferStore) -> Result<HeartbeatStatus, String> {
     let profile = identity::load_profile()?
         .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
     validate_stored_profile(&profile)?;
@@ -486,17 +521,21 @@ async fn send_heartbeat(app: &AppHandle) -> Result<HeartbeatStatus, String> {
     } else {
         heartbeat_request(&profile, credential.as_str(), &acknowledged_event_ids).await?
     };
+    let share_offers = sync_share_offers(app, offers, &profile, &envelope.events)?;
 
     Ok(HeartbeatStatus {
         server_time: envelope.server_time,
         pending_events: envelope.events.len(),
         delivered_notifications,
         notification_failures,
+        offers: share_offers,
     })
 }
 
 pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
     let (wake, mut wake_requests) = mpsc::channel(1);
+    let offers = Arc::new(Mutex::new(HashMap::new()));
+    let worker_offers = Arc::clone(&offers);
     tauri::async_runtime::spawn(async move {
         let mut failures = 0_u32;
 
@@ -510,7 +549,7 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
                     break;
                 }
 
-                let result = send_heartbeat(&app).await;
+                let result = send_heartbeat(&app, &worker_offers).await;
                 let delay = match result {
                     Ok(status) => {
                         failures = 0;
@@ -525,6 +564,7 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
                                 pending_events: status.pending_events,
                                 delivered_notifications: status.delivered_notifications,
                                 notification_failures: status.notification_failures,
+                                offers: status.offers,
                             },
                         );
                         Duration::from_secs(HEALTHY_HEARTBEAT_SECONDS)
@@ -556,7 +596,7 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
             }
         }
     });
-    HeartbeatService { wake }
+    HeartbeatService { wake, offers }
 }
 
 #[tauri::command]
@@ -588,6 +628,7 @@ async fn heartbeat_request(
         .bearer_auth(credential)
         .json(&serde_json::json!({
             "protocol": PROTOCOL_MAX,
+            "capabilities": initial_capabilities(),
             "acknowledgedEventIds": acknowledged_event_ids
         }))
         .send()
@@ -649,6 +690,178 @@ fn bounded_notification_text(value: &str, maximum: usize) -> Result<String, ()> 
         return Err(());
     }
     Ok(value.to_owned())
+}
+
+fn sync_share_offers(
+    app: &AppHandle,
+    offers: &OfferStore,
+    profile: &StoredProfile,
+    events: &[HeartbeatEvent],
+) -> Result<Vec<ShareOfferSummary>, String> {
+    let parsed: Vec<PendingShareOffer> = events
+        .iter()
+        .filter_map(|event| pending_share_offer(event, &profile.server_id))
+        .collect();
+    let active_ids: HashSet<&str> = parsed.iter().map(|offer| offer.id.as_str()).collect();
+    let mut new_offers = Vec::new();
+    {
+        let mut stored = offers
+            .lock()
+            .map_err(|_| "Could not access pending HomePlace offers.".to_string())?;
+        stored.retain(|_, offer| {
+            offer.server_id != profile.server_id || active_ids.contains(offer.id.as_str())
+        });
+        for offer in parsed {
+            let key = offer_key(&offer.server_id, &offer.id);
+            if !stored.contains_key(&key) {
+                new_offers.push(offer.clone());
+            }
+            stored.insert(key, offer);
+        }
+    }
+
+    for offer in new_offers {
+        let kind = match offer.content {
+            ShareContent::Url(_) => "link",
+            ShareContent::Text(_) => "text",
+        };
+        let _ = app
+            .notification()
+            .builder()
+            .title("HomePlace Link")
+            .body(format!(
+                "New {kind} from {} is waiting for approval.",
+                offer.source_name
+            ))
+            .show();
+    }
+
+    offer_summaries(offers, &profile.server_id)
+}
+
+fn pending_share_offer(event: &HeartbeatEvent, server_id: &str) -> Option<PendingShareOffer> {
+    let source_name =
+        bounded_notification_text(event.payload.get("sourceName")?.as_str()?, 80).ok()?;
+    let content = match event.kind.as_str() {
+        "clipboard.offer" => {
+            ShareContent::Text(valid_offer_text(event.payload.get("text")?.as_str()?)?)
+        }
+        "share.offer" => {
+            let value = event.payload.get("value")?.as_str()?;
+            match event.payload.get("type")?.as_str()? {
+                "url" => ShareContent::Url(valid_offer_url(value)?),
+                "text" => ShareContent::Text(valid_offer_text(value)?),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    Some(PendingShareOffer {
+        id: event.id.clone(),
+        server_id: server_id.to_owned(),
+        source_name,
+        sent_at: event.sent_at.clone(),
+        content,
+    })
+}
+
+fn valid_offer_text(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().count() > 8_000
+        || value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return None;
+    }
+    Some(value.to_owned())
+}
+
+fn valid_offer_url(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > 4_096 {
+        return None;
+    }
+    let url = Url::parse(value).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    Some(url.to_string())
+}
+
+fn offer_key(server_id: &str, event_id: &str) -> String {
+    format!("{server_id}:{event_id}")
+}
+
+fn offer_summaries(offers: &OfferStore, server_id: &str) -> Result<Vec<ShareOfferSummary>, String> {
+    let stored = offers
+        .lock()
+        .map_err(|_| "Could not access pending HomePlace offers.".to_string())?;
+    let mut summaries: Vec<ShareOfferSummary> = stored
+        .values()
+        .filter(|offer| offer.server_id == server_id)
+        .map(|offer| ShareOfferSummary {
+            id: offer.id.clone(),
+            kind: match offer.content {
+                ShareContent::Url(_) => "url".into(),
+                ShareContent::Text(_) => "text".into(),
+            },
+            source_name: offer.source_name.clone(),
+            sent_at: offer.sent_at.clone(),
+        })
+        .collect();
+    summaries.sort_by(|left, right| left.sent_at.cmp(&right.sent_at));
+    Ok(summaries)
+}
+
+#[tauri::command]
+pub async fn resolve_share_offer(
+    app: AppHandle,
+    event_id: String,
+    action: String,
+    service: State<'_, HeartbeatService>,
+) -> Result<Vec<ShareOfferSummary>, String> {
+    if !safe_identifier(&event_id) {
+        return Err("The HomePlace offer ID is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let key = offer_key(&profile.server_id, &event_id);
+    let offer = service
+        .offers
+        .lock()
+        .map_err(|_| "Could not access pending HomePlace offers.".to_string())?
+        .get(&key)
+        .cloned()
+        .ok_or_else(|| "The HomePlace offer is no longer available.".to_string())?;
+
+    match (action.as_str(), &offer.content) {
+        ("open", ShareContent::Url(url)) => app
+            .opener()
+            .open_url(url, None::<&str>)
+            .map_err(|_| "The link could not be opened.".to_string())?,
+        ("copy", ShareContent::Text(text)) => app
+            .clipboard()
+            .write_text(text)
+            .map_err(|_| "The text could not be copied to clipboard.".to_string())?,
+        ("decline", _) => {}
+        _ => return Err("The requested HomePlace offer action is not allowed.".into()),
+    }
+
+    let credential = identity::load_credential(&profile.server_id)?;
+    heartbeat_request(&profile, credential.as_str(), &[event_id]).await?;
+    service
+        .offers
+        .lock()
+        .map_err(|_| "Could not access pending HomePlace offers.".to_string())?
+        .remove(&key);
+    service.wake();
+    offer_summaries(&service.offers, &profile.server_id)
 }
 
 #[tauri::command]
@@ -1062,6 +1275,12 @@ mod tests {
             pending_events: 2,
             delivered_notifications: 1,
             notification_failures: 0,
+            offers: vec![ShareOfferSummary {
+                id: "offer_123".into(),
+                kind: "url".into(),
+                source_name: "Phone".into(),
+                sent_at: "2026-09-20T17:59:00Z".into(),
+            }],
         })
         .unwrap();
 
@@ -1070,7 +1289,50 @@ mod tests {
         assert_eq!(value["pendingEvents"], 2);
         assert_eq!(value["deliveredNotifications"], 1);
         assert_eq!(value["notificationFailures"], 0);
+        assert_eq!(value["offers"][0]["kind"], "url");
         assert!(value.get("server_time").is_none());
+    }
+
+    #[test]
+    fn validates_share_offers_without_exposing_their_content() {
+        let event = share_event(
+            "share.offer",
+            serde_json::json!({
+                "type": "url",
+                "value": "https://example.net/watch?id=1",
+                "sourceName": "Phone"
+            }),
+        );
+        let offer = pending_share_offer(&event, "e54f9bfa-2543-4be2-bc07-c1eb3d0947ee").unwrap();
+
+        assert!(matches!(offer.content, ShareContent::Url(_)));
+        let summary = ShareOfferSummary {
+            id: offer.id,
+            kind: "url".into(),
+            source_name: offer.source_name,
+            sent_at: offer.sent_at,
+        };
+        let serialized = serde_json::to_value(summary).unwrap().to_string();
+        assert!(!serialized.contains("example.net"));
+    }
+
+    #[test]
+    fn rejects_unsafe_urls_and_control_characters_in_offers() {
+        let unsafe_url = share_event(
+            "share.offer",
+            serde_json::json!({
+                "type": "url",
+                "value": "javascript:alert(1)",
+                "sourceName": "Phone"
+            }),
+        );
+        let unsafe_text = share_event(
+            "clipboard.offer",
+            serde_json::json!({ "text": "secret\u{0000}", "sourceName": "Phone" }),
+        );
+
+        assert!(pending_share_offer(&unsafe_url, "server").is_none());
+        assert!(pending_share_offer(&unsafe_text, "server").is_none());
     }
 
     fn notification_event(payload: serde_json::Value) -> HeartbeatEvent {
@@ -1078,6 +1340,17 @@ mod tests {
             protocol: PROTOCOL_MAX,
             id: "notification_event".into(),
             kind: "notification.deliver".into(),
+            device_id: "device_123".into(),
+            sent_at: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
+            payload,
+        }
+    }
+
+    fn share_event(kind: &str, payload: serde_json::Value) -> HeartbeatEvent {
+        HeartbeatEvent {
+            protocol: PROTOCOL_MAX,
+            id: "offer_123".into(),
+            kind: kind.into(),
             device_id: "device_123".into(),
             sent_at: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
             payload,

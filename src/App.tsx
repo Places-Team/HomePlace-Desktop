@@ -50,8 +50,16 @@ type HeartbeatUpdate =
       pendingEvents: number;
       deliveredNotifications: number;
       notificationFailures: number;
+      offers: ShareOfferSummary[];
     }
   | { status: "failed"; message: string };
+
+type ShareOfferSummary = {
+  id: string;
+  kind: "url" | "text";
+  sourceName: string;
+  sentAt: string;
+};
 
 type StartupStatus = {
   enabled: boolean;
@@ -102,6 +110,9 @@ export function App() {
   const [pendingEvents, setPendingEvents] = useState(0);
   const [deliveredNotifications, setDeliveredNotifications] = useState(0);
   const [notificationFailures, setNotificationFailures] = useState(0);
+  const [offers, setOffers] = useState<ShareOfferSummary[]>([]);
+  const [offerBusy, setOfferBusy] = useState<string | null>(null);
+  const [offerError, setOfferError] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [startupEnabled, setStartupEnabled] = useState(false);
   const [startupLoaded, setStartupLoaded] = useState(false);
@@ -165,6 +176,8 @@ export function App() {
           setPendingEvents(0);
           setDeliveredNotifications(0);
           setNotificationFailures(0);
+          setOffers([]);
+          setOfferError(null);
           if (active) {
             setAddress(active.address);
             setDeviceName(active.deviceName);
@@ -258,6 +271,8 @@ export function App() {
       setPendingEvents(payload.pendingEvents);
       setDeliveredNotifications(payload.deliveredNotifications);
       setNotificationFailures(payload.notificationFailures);
+      setOffers(payload.offers);
+      setOfferError(null);
       setHeartbeatError(null);
     })
       .then((unlisten) => {
@@ -310,6 +325,8 @@ export function App() {
     setPendingEvents(0);
     setDeliveredNotifications(0);
     setNotificationFailures(0);
+    setOffers([]);
+    setOfferError(null);
   }
 
   function showProfile(profile: ConnectionProfile) {
@@ -443,6 +460,26 @@ export function App() {
       setHeartbeatError(errorMessage(reason));
     } finally {
       setReconnecting(false);
+    }
+  }
+
+  async function handleOffer(
+    offer: ShareOfferSummary,
+    action: "open" | "copy" | "decline",
+  ) {
+    if (offerBusy) return;
+    setOfferBusy(offer.id);
+    setOfferError(null);
+    try {
+      const remaining = await invoke<ShareOfferSummary[]>("resolve_share_offer", {
+        eventId: offer.id,
+        action,
+      });
+      setOffers(remaining);
+    } catch (reason) {
+      setOfferError(errorMessage(reason));
+    } finally {
+      setOfferBusy(null);
     }
   }
 
@@ -693,6 +730,56 @@ export function App() {
                   ? ` · ${pendingEvents} pending event${pendingEvents === 1 ? "" : "s"}`
                   : ""}
               </span>
+            )}
+
+            {offers.length > 0 && (
+              <section className="pending-offers" aria-label="Pending shares">
+                <div className="offer-heading">
+                  <b>Waiting for approval</b>
+                  <span>{offers.length}</span>
+                </div>
+                {offers.map((offer) => (
+                  <article key={offer.id} className="offer-row">
+                    <span className="offer-icon" aria-hidden>
+                      {offer.kind === "url" ? "↗" : "T"}
+                    </span>
+                    <span className="offer-copy">
+                      <b>{offer.kind === "url" ? "Open link" : "Copy text"}</b>
+                      <small>
+                        From {offer.sourceName} ·{" "}
+                        {new Date(offer.sentAt).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </small>
+                    </span>
+                    <button
+                      type="button"
+                      disabled={offerBusy !== null}
+                      onClick={() =>
+                        void handleOffer(
+                          offer,
+                          offer.kind === "url" ? "open" : "copy",
+                        )
+                      }
+                    >
+                      {offerBusy === offer.id ? "Working…" : "Accept"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={offerBusy !== null}
+                      onClick={() => void handleOffer(offer, "decline")}
+                    >
+                      Decline
+                    </button>
+                  </article>
+                ))}
+                {offerError && (
+                  <span className="setting-error" role="alert">
+                    {offerError}
+                  </span>
+                )}
+              </section>
             )}
 
             <div className="connection-actions">

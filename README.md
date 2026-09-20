@@ -44,9 +44,12 @@ request, polls for approval and stores the one-time device credential without
 exposing secrets to the interface. The active profile is restored after restart
 and reports authenticated presence to HomePlace. Heartbeats use bounded
 reconnect backoff, resume immediately when the computer returns online and
-securely deliver validated HomePlace events as native notifications. Events are
-acknowledged only after local delivery. Revocation, secure local forgetting and
-credential cleanup are also supported. The native tray keeps Link active after
+securely deliver validated HomePlace events as native notifications. Links,
+shared text and clipboard offers wait for explicit approval before Rust opens
+the browser or writes to the system clipboard; their content is never exposed
+to the web interface. Events are acknowledged only after the approved local
+action. Revocation, secure local forgetting and credential cleanup are also
+supported. The native tray keeps Link active after
 the window closes, and the Rust heartbeat service continues independently of
 the interface. Users can explicitly enable start-at-login, which launches Link
 hidden in the tray without enabling itself by default. Multiple HomePlace
