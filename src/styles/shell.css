@@ -102,7 +102,14 @@
 .sidebar-status b, .sidebar-status small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-status b { font-size: 10px; }
 .sidebar-status small { color: var(--muted); font-size: 8px; }
-.app-content { min-width: 0; padding: 12px 16px 14px 0; }
+.app-content { min-width: 0; padding: 12px 16px 14px 0; transition: margin-left 180ms ease; }
+
+@media (min-width: 761px) {
+  .app-sidebar:hover + .app-content,
+  .app-sidebar:focus-within + .app-content {
+    margin-left: 146px;
+  }
+}
 .app-content .titlebar { min-height: 54px; margin: 0 2px 16px; }
 .app-content .titlebar h1 { font-size: 21px; }
 .titlebar-actions { display: flex; align-items: center; gap: 9px; margin-left: auto; }
