@@ -1,0 +1,25 @@
+[package]
+name = "homeplace-desktop"
+version = "0.1.0"
+description = "Native desktop companion for HomePlace"
+authors = ["Olmae"]
+edition = "2024"
+
+[lib]
+name = "homeplace_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

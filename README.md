@@ -34,9 +34,13 @@ chrome, materials and system integrations can vary by operating system.
 
 ## Status
 
-The repository is in the architecture and protocol-alignment phase. The first
-working milestone is pairing with a HomePlace server, storing the device
-credential securely and reporting presence from the system tray.
+Phase 0 is in progress. The repository now contains a working Tauri 2 shell,
+platform-specific visual treatments, the first Link protocol validators,
+capability boundaries and macOS/Windows/Linux CI checks. The connection form is
+currently an interface state preview and does not contact a server yet.
+
+The first functional milestone is pairing with a HomePlace server, storing the
+device credential securely and reporting presence from the system tray.
 
 See [Development plan](docs/DEVELOPMENT_PLAN.md),
 [Architecture](docs/ARCHITECTURE.md) and
@@ -53,4 +57,3 @@ See [Development plan](docs/DEVELOPMENT_PLAN.md),
 
 The project is intended to use the same Apache-2.0 license as HomePlace. The
 license file will be added with the first application scaffold.
-

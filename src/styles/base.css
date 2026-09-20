@@ -1,0 +1,156 @@
+:root {
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f6f7fb;
+  background: #0b0d12;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  color-scheme: dark;
+  --surface: rgba(25, 29, 38, 0.68);
+  --surface-strong: rgba(30, 35, 46, 0.84);
+  --line: rgba(255, 255, 255, 0.1);
+  --muted: rgba(235, 239, 248, 0.62);
+  --accent: #8aa8ff;
+  --accent-strong: #b5c5ff;
+  --shadow: 0 24px 80px rgba(0, 0, 0, 0.38);
+}
+
+* { box-sizing: border-box; }
+html, body, #root { min-height: 100%; margin: 0; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: 0.55; }
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at 18% -10%, rgba(76, 105, 199, 0.2), transparent 38%),
+    radial-gradient(circle at 90% 95%, rgba(84, 54, 150, 0.2), transparent 34%),
+    #0b0d12;
+}
+
+.desktop-shell {
+  position: relative;
+  isolation: isolate;
+  width: min(920px, 100%);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 38px 42px 28px;
+}
+
+.ambient {
+  position: fixed;
+  z-index: -1;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.24;
+  pointer-events: none;
+}
+.ambient-one { top: 4%; left: 8%; background: #4a71e8; }
+.ambient-two { right: 3%; bottom: 2%; background: #7147c7; }
+
+.titlebar { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; }
+.titlebar h1 { margin: 1px 0 0; font-size: 18px; letter-spacing: -0.02em; }
+.brand-mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 13px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.06));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 10px 30px rgba(0,0,0,.22);
+  font-weight: 720;
+}
+.platform-pill {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(255,255,255,.05);
+  color: var(--muted);
+  font-size: 12px;
+}
+.eyebrow { margin: 0; color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; }
+
+.glass-card {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), var(--shadow);
+  backdrop-filter: blur(30px) saturate(135%);
+  -webkit-backdrop-filter: blur(30px) saturate(135%);
+}
+.hero-card { border-radius: 25px; padding: 34px; }
+.hero-copy { max-width: 650px; }
+.hero-copy .eyebrow { display: inline; color: #b8c7ff; }
+.status-dot { display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: #7ed5a8; box-shadow: 0 0 14px rgba(126,213,168,.8); }
+.hero-card h2 { max-width: 690px; margin: 12px 0; font-size: clamp(30px, 5vw, 48px); line-height: 1.04; letter-spacing: -.045em; }
+.lead { max-width: 620px; margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
+
+.progress { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 30px 0; padding: 0; list-style: none; }
+.progress li { display: flex; align-items: center; gap: 8px; color: rgba(235,239,248,.35); font-size: 12px; }
+.progress li::after { content: ""; height: 1px; flex: 1; background: var(--line); }
+.progress li:last-child::after { display: none; }
+.progress span { display: grid; width: 22px; height: 22px; place-items: center; border: 1px solid var(--line); border-radius: 50%; font-size: 10px; }
+.progress .active { color: var(--accent-strong); }
+.progress .active span { border-color: rgba(138,168,255,.5); background: rgba(138,168,255,.13); }
+
+.connect-form label { display: block; margin-bottom: 8px; color: rgba(246,247,251,.82); font-size: 12px; font-weight: 620; }
+.field-row { display: flex; gap: 10px; }
+.field-row input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  outline: none;
+  background: rgba(0,0,0,.2);
+  padding: 12px 14px;
+  color: #fff;
+  transition: border-color .18s, background .18s;
+}
+.field-row input:focus { border-color: rgba(138,168,255,.6); background: rgba(0,0,0,.29); }
+.field-row button {
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #9bb2ff, #708eea);
+  padding: 0 20px;
+  color: #10162b;
+  font-weight: 720;
+  box-shadow: inset 0 1px rgba(255,255,255,.35), 0 8px 24px rgba(59,85,170,.32);
+}
+.hint { margin: 9px 2px 0; color: rgba(235,239,248,.42); font-size: 11px; }
+
+.details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+.detail-card { display: flex; min-height: 128px; gap: 14px; border-radius: 18px; padding: 20px; }
+.detail-icon { display: grid; flex: 0 0 auto; width: 38px; height: 38px; place-items: center; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.05); color: var(--accent-strong); font-size: 22px; }
+.detail-card h3 { margin: 2px 0 7px; font-size: 14px; }
+.detail-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+footer { display: flex; justify-content: space-between; gap: 20px; padding: 22px 5px 0; color: rgba(235,239,248,.34); font-size: 10px; }
+
+html[data-platform="windows"] { --surface: rgba(26, 31, 41, 0.78); --accent: #70b7ff; --accent-strong: #afd8ff; }
+html[data-platform="windows"] .glass-card { border-radius: 10px; backdrop-filter: blur(22px); }
+html[data-platform="linux"] { --surface: rgba(26, 29, 36, 0.94); --accent: #8bc5aa; --accent-strong: #b6e5cf; }
+html[data-platform="linux"] .glass-card { backdrop-filter: none; }
+
+@media (max-width: 680px) {
+  .desktop-shell { padding: 24px 18px; }
+  .hero-card { padding: 24px; }
+  .details-grid { grid-template-columns: 1fr; }
+  .field-row { flex-direction: column; }
+  .field-row button { min-height: 44px; }
+  .progress li { font-size: 0; }
+  footer { flex-direction: column; gap: 5px; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root { --surface: #1a1e27; }
+  .glass-card { backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .ambient { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}
