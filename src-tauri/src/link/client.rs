@@ -67,7 +67,11 @@ pub struct HeartbeatStatus {
 }
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(tag = "status", rename_all = "camelCase")]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 enum HeartbeatUpdate {
     Connected {
         server_time: String,
@@ -975,6 +979,24 @@ mod tests {
         assert_eq!(heartbeat_retry_delay(4), Duration::from_secs(240));
         assert_eq!(heartbeat_retry_delay(5), Duration::from_secs(300));
         assert_eq!(heartbeat_retry_delay(u32::MAX), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn serializes_heartbeat_updates_for_the_interface() {
+        let value = serde_json::to_value(HeartbeatUpdate::Connected {
+            server_time: "2026-09-20T18:00:00Z".into(),
+            pending_events: 2,
+            delivered_notifications: 1,
+            notification_failures: 0,
+        })
+        .unwrap();
+
+        assert_eq!(value["status"], "connected");
+        assert_eq!(value["serverTime"], "2026-09-20T18:00:00Z");
+        assert_eq!(value["pendingEvents"], 2);
+        assert_eq!(value["deliveredNotifications"], 1);
+        assert_eq!(value["notificationFailures"], 0);
+        assert!(value.get("server_time").is_none());
     }
 
     fn notification_event(payload: serde_json::Value) -> HeartbeatEvent {

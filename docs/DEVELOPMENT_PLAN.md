@@ -113,6 +113,9 @@ application is missing and never expose context to another HomePlace user.
 Exit criteria: releases install and update on clean supported systems, preserve
 device identity during normal upgrades and can be rolled back safely.
 
+Current progress: opt-in cross-platform autostart and hidden tray launch are
+implemented. Installer-level startup, upgrade and uninstall tests remain.
+
 ## Initial capability matrix
 
 | Capability | macOS | Windows | Linux |

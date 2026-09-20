@@ -48,6 +48,10 @@ type HeartbeatUpdate =
     }
   | { status: "failed"; message: string };
 
+type StartupStatus = {
+  enabled: boolean;
+};
+
 const steps = ["Server", "Verify", "Approve", "Connected"];
 
 function errorMessage(error: unknown): string {
@@ -79,6 +83,10 @@ export function App() {
   const [pendingEvents, setPendingEvents] = useState(0);
   const [deliveredNotifications, setDeliveredNotifications] = useState(0);
   const [notificationFailures, setNotificationFailures] = useState(0);
+  const [startupEnabled, setStartupEnabled] = useState(false);
+  const [startupLoaded, setStartupLoaded] = useState(false);
+  const [startupBusy, setStartupBusy] = useState(false);
+  const [startupError, setStartupError] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<PlatformInfo>("platform_info")
@@ -187,6 +195,24 @@ export function App() {
     };
   }, [state]);
 
+  useEffect(() => {
+    if (state !== "connected") return;
+    let cancelled = false;
+    invoke<StartupStatus>("startup_status")
+      .then((status) => {
+        if (!cancelled) setStartupEnabled(status.enabled);
+      })
+      .catch((reason) => {
+        if (!cancelled) setStartupError(errorMessage(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setStartupLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state]);
+
   const current = progressIndex(state);
   const busy = state === "verifying" || state === "requesting";
 
@@ -248,9 +274,25 @@ export function App() {
       setPendingEvents(0);
       setDeliveredNotifications(0);
       setNotificationFailures(0);
+      setStartupLoaded(false);
+      setStartupError(null);
       setError(null);
     } catch (reason) {
       setHeartbeatError(errorMessage(reason));
+    }
+  }
+
+  async function updateStartup(enabled: boolean) {
+    if (startupBusy) return;
+    setStartupBusy(true);
+    setStartupError(null);
+    try {
+      const status = await invoke<StartupStatus>("set_startup_enabled", { enabled });
+      setStartupEnabled(status.enabled);
+    } catch (reason) {
+      setStartupError(errorMessage(reason));
+    } finally {
+      setStartupBusy(false);
     }
   }
 
@@ -373,6 +415,20 @@ export function App() {
               {heartbeatError && <button type="button" onClick={() => void disconnect(false)}>Forget locally</button>}
               <button type="button" onClick={() => void disconnect(true)}>Disconnect</button>
             </div>
+            <label className="startup-setting">
+              <span>
+                <b>Start at login</b>
+                <small>Launch hidden and keep Link available in the system tray.</small>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                checked={startupEnabled}
+                disabled={startupBusy || !startupLoaded}
+                onChange={(event) => void updateStartup(event.target.checked)}
+              />
+            </label>
+            {startupError && <span className="setting-error" role="alert">{startupError}</span>}
           </section>
         )}
       </section>

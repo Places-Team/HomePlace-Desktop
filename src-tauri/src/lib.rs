@@ -1,5 +1,6 @@
 mod link;
 mod platform;
+mod startup;
 mod tray;
 
 use platform::PlatformInfo;
@@ -29,6 +30,11 @@ fn platform_info() -> BootstrapInfo {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .args(["--hidden"])
+                .build(),
+        )
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // Some Linux desktop environments do not provide a tray host. In
@@ -36,6 +42,12 @@ pub fn run() {
             let _ = tray::install(app);
             let heartbeat = link::client::start_heartbeat_service(app.handle().clone());
             app.manage(heartbeat);
+            if startup::starts_hidden()
+                && app.tray_by_id(tray::TRAY_ID).is_some()
+                && let Some(window) = app.get_webview_window("main")
+            {
+                let _ = window.hide();
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -52,6 +64,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             platform_info,
+            startup::startup_status,
+            startup::set_startup_enabled,
             link::client::verify_server,
             link::client::start_pairing,
             link::client::poll_pairing,

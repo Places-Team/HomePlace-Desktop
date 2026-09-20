@@ -189,6 +189,13 @@ body {
 .connection-actions { display: flex; justify-content: center; gap: 8px; margin-top: 14px; }
 .connection-actions button { border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.04); padding: 7px 11px; color: var(--muted); font-size: 11px; }
 .connection-actions button:hover { border-color: rgba(255,255,255,.2); color: #fff; }
+.startup-setting { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 16px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,.08); text-align: left; }
+.startup-setting > span { display: grid; gap: 3px; }
+.startup-setting b { color: rgba(232,255,243,.92); font-size: 12px; }
+.startup-setting small { color: rgba(235,239,248,.48); font-size: 11px; line-height: 1.35; }
+.startup-setting input { width: 34px; height: 19px; flex: 0 0 auto; accent-color: #7ed5a8; cursor: pointer; }
+.startup-setting input:disabled { cursor: default; opacity: .55; }
+.connected-card .setting-error { display: block; margin-top: 8px; color: #ffc2c8; }
 
 .details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
 .detail-card { display: flex; min-height: 128px; gap: 14px; border-radius: 18px; padding: 20px; }
