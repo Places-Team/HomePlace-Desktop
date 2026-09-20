@@ -193,7 +193,7 @@ enum HeartbeatUpdate {
     },
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NotificationContent {
     title: String,
@@ -1161,6 +1161,7 @@ where
     let mut acknowledged_event_ids = Vec::new();
     let mut delivered = 0;
     let mut failures = 0;
+    let mut groups: Vec<(NotificationContent, Vec<String>, OffsetDateTime)> = Vec::new();
 
     for event in events {
         if event.kind != "notification.deliver" {
@@ -1171,9 +1172,34 @@ where
             failures += 1;
             continue;
         };
+        let Ok(sent_at) = OffsetDateTime::parse(&event.sent_at, &Rfc3339) else {
+            failures += 1;
+            continue;
+        };
 
+        if let Some((_, event_ids, latest_at)) =
+            groups.iter_mut().rev().find(|(candidate, _, at)| {
+                candidate.title == notification.title
+                    && candidate.body == notification.body
+                    && (*at - sent_at).whole_seconds().abs() <= 10 * 60
+            })
+        {
+            event_ids.push(event.id.clone());
+            if sent_at > *latest_at {
+                *latest_at = sent_at;
+            }
+        } else {
+            groups.push((notification, vec![event.id.clone()], sent_at));
+        }
+    }
+
+    for (mut notification, event_ids, _) in groups {
+        if event_ids.len() > 1 {
+            notification.title =
+                notification_title_with_count(&notification.title, event_ids.len());
+        }
         if deliver(&notification).is_ok() {
-            acknowledged_event_ids.push(event.id.clone());
+            acknowledged_event_ids.extend(event_ids);
             delivered += 1;
         } else {
             failures += 1;
@@ -1181,6 +1207,14 @@ where
     }
 
     (acknowledged_event_ids, delivered, failures)
+}
+
+fn notification_title_with_count(title: &str, count: usize) -> String {
+    let suffix = format!(" ×{count}");
+    let keep = 120usize.saturating_sub(suffix.chars().count());
+    let mut result = title.chars().take(keep).collect::<String>();
+    result.push_str(&suffix);
+    result
 }
 
 fn notification_content(event: &HeartbeatEvent) -> Result<NotificationContent, ()> {
@@ -2398,6 +2432,32 @@ mod tests {
         assert!(acknowledged.is_empty());
         assert_eq!(delivered, 0);
         assert_eq!(failures, 1);
+    }
+
+    #[test]
+    fn groups_identical_nearby_notifications_and_acknowledges_every_event() {
+        let mut first = notification_event(serde_json::json!({
+            "title": "HomePlace",
+            "body": "Service is unavailable"
+        }));
+        first.id = "notification_one".into();
+        let mut second = notification_event(serde_json::json!({
+            "title": "HomePlace",
+            "body": "Service is unavailable"
+        }));
+        second.id = "notification_two".into();
+
+        let mut delivered_title = String::new();
+        let (acknowledged, delivered, failures) =
+            deliver_notifications(&[first, second], |notification| {
+                delivered_title = notification.title.clone();
+                Ok(())
+            });
+
+        assert_eq!(acknowledged, vec!["notification_one", "notification_two"]);
+        assert_eq!(delivered, 1);
+        assert_eq!(failures, 0);
+        assert_eq!(delivered_title, "HomePlace ×2");
     }
 
     #[test]
