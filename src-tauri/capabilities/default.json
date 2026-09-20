@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core permissions for the HomePlace Desktop main window",
-  "windows": ["main"],
+  "description": "Core permissions for the HomePlace Desktop windows",
+  "windows": ["main", "quick-share"],
   "permissions": ["core:default"]
 }

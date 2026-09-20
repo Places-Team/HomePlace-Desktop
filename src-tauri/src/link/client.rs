@@ -21,7 +21,8 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
-use tokio::{sync::mpsc, time::sleep};
+use tokio::{io::AsyncWriteExt, sync::mpsc, time::sleep};
+use tokio_util::io::ReaderStream;
 use url::{Host, Url};
 use zeroize::Zeroizing;
 
@@ -33,7 +34,7 @@ use super::{
 use crate::platform;
 
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
-const MAX_SHARE_FILE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_SHARE_FILE_BYTES: usize = 500 * 1024 * 1024;
 const HEARTBEAT_EVENT: &str = "link-heartbeat";
 const HEALTHY_HEARTBEAT_SECONDS: u64 = 30;
 const MAX_RETRY_SECONDS: u64 = 5 * 60;
@@ -934,7 +935,7 @@ pub async fn send_share_file(target_device_id: String, file_path: String) -> Res
     let metadata =
         fs::metadata(&path).map_err(|_| "The dropped file is no longer available.".to_string())?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_SHARE_FILE_BYTES as u64 {
-        return Err("Choose a file between 1 byte and 64 MiB.".into());
+        return Err("Choose a file between 1 byte and 500 MiB.".into());
     }
     let filename = path
         .file_name()
@@ -944,14 +945,10 @@ pub async fn send_share_file(target_device_id: String, file_path: String) -> Res
         })
         .ok_or_else(|| "The dropped filename is invalid.".to_string())?
         .to_owned();
-    let read_path = path.clone();
-    let bytes = tauri::async_runtime::spawn_blocking(move || fs::read(read_path))
+    let file = tokio::fs::File::open(&path)
         .await
-        .map_err(|_| "The dropped file could not be read.".to_string())?
         .map_err(|_| "The dropped file could not be read.".to_string())?;
-    if bytes.len() != metadata.len() as usize {
-        return Err("The dropped file changed while it was being read.".into());
-    }
+    let body = reqwest::Body::wrap_stream(ReaderStream::new(file));
     let profile = identity::load_profile()?
         .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
     validate_stored_profile(&profile)?;
@@ -969,8 +966,9 @@ pub async fn send_share_file(target_device_id: String, file_path: String) -> Res
             "x-homeplace-filename-base64",
             STANDARD.encode(filename.as_bytes()),
         )
+        .header(reqwest::header::CONTENT_LENGTH, metadata.len())
         .bearer_auth(credential.as_str())
-        .body(bytes)
+        .body(body)
         .send()
         .await
         .map_err(|error| connection_error(&error))?;
@@ -980,7 +978,7 @@ pub async fn send_share_file(target_device_id: String, file_path: String) -> Res
             Err("Quick sharing is disabled for this device. Enable it in HomePlace Devices.".into())
         }
         404 => Err("The selected device is no longer available.".into()),
-        413 => Err("The selected file is larger than 64 MiB.".into()),
+        413 => Err("The selected file is larger than 500 MiB.".into()),
         _ => ensure_success(&response, "file share"),
     }
 }
@@ -1485,25 +1483,71 @@ async fn save_received_file(
         return Err("The received file checksum header does not match the offer.".into());
     }
 
-    let mut bytes = Vec::with_capacity(offer.size);
-    let mut hasher = Sha256::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| "The shared file could not be downloaded.".to_string())?;
-        if bytes.len().saturating_add(chunk.len()) > offer.size
-            || bytes.len().saturating_add(chunk.len()) > MAX_SHARE_FILE_BYTES
-        {
-            return Err("The shared file is larger than the approved offer.".into());
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "The selected file destination is invalid.".to_string())?;
+    let file_name = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "The selected file name is invalid.".to_string())?;
+    let temporary = parent.join(format!(
+        ".{file_name}.homeplace-{}.part",
+        uuid::Uuid::new_v4()
+    ));
+    let result = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .await
+            .map_err(|_| "The temporary destination file could not be created.".to_string())?;
+        let mut actual_size = 0usize;
+        let mut hasher = Sha256::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.map_err(|_| "The shared file could not be downloaded.".to_string())?;
+            actual_size = actual_size
+                .checked_add(chunk.len())
+                .filter(|size| *size <= offer.size && *size <= MAX_SHARE_FILE_BYTES)
+                .ok_or_else(|| "The shared file is larger than the approved offer.".to_string())?;
+            hasher.update(&chunk);
+            file.write_all(&chunk)
+                .await
+                .map_err(|_| "The shared file could not be saved.".to_string())?;
         }
-        hasher.update(&chunk);
-        bytes.extend_from_slice(&chunk);
-    }
-    let actual_sha256 = format!("{:x}", hasher.finalize());
-    if !file_integrity_matches(offer.size, &offer.sha256, bytes.len(), &actual_sha256) {
-        return Err("The shared file failed its integrity check.".into());
-    }
+        file.flush()
+            .await
+            .map_err(|_| "The shared file could not be saved.".to_string())?;
+        file.sync_all()
+            .await
+            .map_err(|_| "The shared file could not be saved.".to_string())?;
+        drop(file);
 
-    write_verified_file(destination, &bytes)?;
+        let actual_sha256 = format!("{:x}", hasher.finalize());
+        if !file_integrity_matches(offer.size, &offer.sha256, actual_size, &actual_sha256) {
+            return Err("The shared file failed its integrity check.".to_string());
+        }
+        #[cfg(target_os = "windows")]
+        if destination.exists() {
+            tokio::fs::remove_file(destination)
+                .await
+                .map_err(|_| "The selected Windows file could not be replaced.".to_string())?;
+        }
+        tokio::fs::rename(&temporary, destination)
+            .await
+            .map_err(|_| "The shared file could not be moved to its destination.".to_string())?;
+        #[cfg(unix)]
+        if let Ok(directory) = tokio::fs::File::open(parent).await {
+            let _ = directory.sync_all().await;
+        }
+        Ok(())
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
+    result?;
     Ok(true)
 }
 
@@ -1516,6 +1560,7 @@ fn file_integrity_matches(
     actual_size == expected_size && actual_sha256 == expected_sha256
 }
 
+#[allow(dead_code)]
 fn write_verified_file(destination: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = destination
         .parent()

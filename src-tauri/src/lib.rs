@@ -69,6 +69,19 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "quick-share" {
+                match event {
+                    tauri::WindowEvent::Focused(false) => {
+                        let _ = window.hide();
+                    }
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    _ => {}
+                }
+                return;
+            }
             if window.label() != "main" {
                 return;
             }
@@ -83,6 +96,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             platform_info,
             start_window_drag,
+            tray::set_quick_share_pointer_inside,
             startup::startup_status,
             startup::set_startup_enabled,
             link::client::verify_server,

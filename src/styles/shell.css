@@ -64,6 +64,65 @@
 .quick-share-targets > p { grid-column: 1 / -1; margin: 0; border: 1px dashed var(--line); border-radius: 10px; padding: 10px; color: var(--muted); font-size: 8px; line-height: 1.4; }
 .quick-share-success { margin: 0; color: #9ae4bc; font-size: 9px; }
 
+.tray-share-root {
+  width: 100vw;
+  min-height: 100vh;
+  padding: 8px;
+  background: transparent;
+}
+html[data-window="quick-share"],
+html[data-window="quick-share"] body,
+html[data-window="quick-share"] #root {
+  min-width: 0;
+  overflow: hidden;
+  background: transparent;
+}
+.tray-share-root .quick-share-shelf {
+  position: static;
+  width: 100%;
+  min-height: calc(100vh - 16px);
+  overflow: hidden;
+  border-radius: 18px;
+  background: rgba(18, 21, 29, 0.97);
+  transform: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.tray-share-root.dragging .quick-share-shelf {
+  border-color: rgba(138, 168, 255, 0.7);
+  box-shadow: 0 18px 50px rgba(30, 43, 84, 0.52), inset 0 0 0 1px rgba(138, 168, 255, 0.24);
+}
+.tray-share-titlebar {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 13px;
+}
+.tray-share-titlebar > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgba(138, 168, 255, 0.25);
+  border-radius: 10px;
+  background: rgba(138, 168, 255, 0.1);
+  color: var(--accent-strong);
+}
+.tray-share-titlebar > div { display: grid; gap: 2px; }
+.tray-share-titlebar b { font-size: 12px; }
+.tray-share-titlebar small { color: var(--muted); font-size: 8px; }
+.tray-share-titlebar button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+}
+.tray-share-titlebar button:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
+.tray-share-root .quick-share-targets { grid-template-columns: minmax(0, 1fr); max-height: 222px; }
+
 .app-sidebar {
   position: sticky;
   top: 42px;

@@ -40,7 +40,7 @@ export const copy = {
       eyebrow: "Cross-device handoff", title: "Transfers", lead: "Receive text, links and verified files without exposing their contents to the interface.",
       inbox: "Inbox", waiting: "Waiting for approval", empty: "Nothing waiting", emptyHint: "Incoming links and files that require your approval will appear here.",
       open: "Open link", save: "Save file", copy: "Copy text", from: "From", accept: "Accept", decline: "Decline",
-      send: "Send from this computer", sendHint: "Device picker, drag-and-drop files and link sending are the next transfer milestone.", next: "Coming next",
+      send: "Send from this computer", sendHint: "Drop a file onto the HomePlace menu bar icon, or click it to send text and links.", next: "Menu bar",
     },
     automations: {
       eyebrow: "Link rules", title: "Automations", lead: "Create private flows between devices, Home Assistant and self-hosted services.", preview: "Preview", planned: "Planned", create: "Create automation",
@@ -160,7 +160,7 @@ export const copy = {
       eyebrow: "Передача между устройствами", title: "Передачи", lead: "Получайте текст, ссылки и проверенные файлы, не раскрывая их содержимое интерфейсу.",
       inbox: "Входящие", waiting: "Ожидают подтверждения", empty: "Ничего не ожидает", emptyHint: "Здесь появятся ссылки и файлы, для которых требуется ваше подтверждение.",
       open: "Открыть ссылку", save: "Сохранить файл", copy: "Скопировать текст", from: "От", accept: "Принять", decline: "Отклонить",
-      send: "Отправить с этого компьютера", sendHint: "Выбор устройства, перетаскивание файлов и отправка ссылок — следующий этап.", next: "Следующий этап",
+      send: "Отправить с этого компьютера", sendHint: "Перетащите файл на иконку HomePlace в строке меню или нажмите её для отправки текста и ссылок.", next: "Строка меню",
     },
     automations: {
       eyebrow: "Правила Link", title: "Автоматизации", lead: "Создавайте приватные сценарии между устройствами, Home Assistant и домашними сервисами.", preview: "Макет", planned: "Запланировано", create: "Создать автоматизацию",

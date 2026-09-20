@@ -45,12 +45,12 @@ pub fn initial_capabilities() -> Vec<Capability> {
         Capability {
             name: "file.receive",
             version: 1,
-            constraints: BTreeMap::from([("confirmation", "required"), ("maxBytes", "67108864")]),
+            constraints: BTreeMap::from([("confirmation", "required"), ("maxBytes", "524288000")]),
         },
         Capability {
             name: "share.send",
             version: 1,
-            constraints: BTreeMap::from([("maxBytes", "67108864")]),
+            constraints: BTreeMap::from([("maxBytes", "524288000")]),
         },
     ]
 }
