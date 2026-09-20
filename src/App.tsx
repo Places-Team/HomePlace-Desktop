@@ -1738,7 +1738,7 @@ function MainApp() {
               ))}
             </article>
           )}
-          <article className="glass-card planned-action"><span><Icon name="plus" size={22} /></span><div><b>{ui.transfers.send}</b><p>{ui.transfers.sendHint}</p></div><small>{ui.transfers.next}</small></article>
+          <ShareComposer language={language} />
         </section>
       )}
 
@@ -2116,6 +2116,169 @@ function MainApp() {
   );
 }
 
+function ShareComposer({ language }: { language: Language }) {
+  const [targets, setTargets] = useState<ShareTarget[]>([]);
+  const [files, setFiles] = useState<string[]>([]);
+  const [text, setText] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+
+  function loadTargets() {
+    void invoke<ShareTarget[]>("list_share_targets")
+      .then(setTargets)
+      .catch((reason) => setError(errorMessage(reason)));
+  }
+
+  function stageFiles(paths: string[]) {
+    const unique = [...new Set(paths)].slice(0, 20);
+    if (unique.length === 0) return;
+    setFiles(unique);
+    setText("");
+    setSent(false);
+    setError(null);
+  }
+
+  useEffect(() => {
+    loadTargets();
+    let cancelled = false;
+    let stopDrop: (() => void) | undefined;
+    void getCurrentWebview().onDragDropEvent((event) => {
+      if (cancelled) return;
+      if (event.payload.type === "enter" || event.payload.type === "over") {
+        setDragging(true);
+      } else if (event.payload.type === "leave") {
+        setDragging(false);
+      } else if (event.payload.type === "drop") {
+        setDragging(false);
+        stageFiles(event.payload.paths);
+      }
+    }).then((unlisten) => {
+      if (cancelled) unlisten(); else stopDrop = unlisten;
+    });
+    return () => {
+      cancelled = true;
+      stopDrop?.();
+    };
+  }, []);
+
+  async function chooseFiles() {
+    try {
+      const selected = await invoke<string[]>("pick_share_files");
+      stageFiles(selected);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }
+
+  async function send(target: ShareTarget) {
+    const trimmed = text.trim();
+    if (busy || (files.length === 0 && !trimmed)) return;
+    setBusy(target.id);
+    setSent(false);
+    setError(null);
+    try {
+      if (files.length > 0) {
+        for (const filePath of files) {
+          await invoke("send_share_file", { targetDeviceId: target.id, filePath });
+        }
+      } else {
+        await invoke("send_share_text", {
+          targetDeviceId: target.id,
+          kind: /^https?:\/\/\S+$/i.test(trimmed) ? "url" : "text",
+          value: trimmed,
+        });
+      }
+      setFiles([]);
+      setText("");
+      setSent(true);
+      loadTargets();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const hasPayload = files.length > 0 || text.trim().length > 0;
+  const compatible = targets.filter((target) => files.length > 0
+    ? target.supportsFile
+    : /^https?:\/\/\S+$/i.test(text.trim())
+      ? target.supportsUrl
+      : target.supportsText);
+
+  return (
+    <article className="glass-card share-composer">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">{language === "ru" ? "Новая передача" : "New transfer"}</p>
+          <h3>{language === "ru" ? "Отправить файл, текст или ссылку" : "Send a file, text, or link"}</h3>
+        </div>
+        <span>{files.length > 0 ? files.length : hasPayload ? 1 : 0}</span>
+      </div>
+
+      <button
+        type="button"
+        className={`share-drop-zone${dragging ? " dragging" : ""}`}
+        onClick={() => void chooseFiles()}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          event.preventDefault();
+          const dropped = event.dataTransfer.getData("text/plain");
+          if (dropped) {
+            setFiles([]);
+            setText(dropped.slice(0, 8_000));
+          }
+        }}
+      >
+        <Icon name="transfer" size={24} />
+        <span>
+          <b>{dragging ? (language === "ru" ? "Отпустите файлы здесь" : "Drop files here") : (language === "ru" ? "Перетащите файлы или выберите их" : "Drop files or choose them")}</b>
+          <small>{language === "ru" ? "До 20 файлов, каждый размером до 500 МиБ" : "Up to 20 files, each up to 500 MiB"}</small>
+        </span>
+      </button>
+
+      {files.length > 0 ? (
+        <div className="share-file-list">
+          {files.map((filePath) => (
+            <div className="quick-share-payload" key={filePath}>
+              <Icon name="transfer" size={17} />
+              <span><b>{filePath.split(/[\\/]/).pop() || filePath}</b><small>{language === "ru" ? "Готов к отправке" : "Ready to send"}</small></span>
+              <button type="button" onClick={() => setFiles((current) => current.filter((path) => path !== filePath))}>×</button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <textarea
+          value={text}
+          maxLength={8_000}
+          rows={4}
+          placeholder={language === "ru" ? "Или вставьте текст или ссылку" : "Or paste text or a link"}
+          onChange={(event) => {
+            setText(event.target.value);
+            setSent(false);
+            setError(null);
+          }}
+        />
+      )}
+
+      <div className="share-composer-targets quick-share-targets">
+        {compatible.map((target) => (
+          <button type="button" key={target.id} disabled={!hasPayload || busy !== null} onClick={() => void send(target)}>
+            <span className={target.online ? "online" : undefined}><Icon name="devices" size={17} /></span>
+            <span><b>{target.name}</b><small>{target.ownerName} · {target.platform}</small></span>
+            <em>{busy === target.id ? "…" : "→"}</em>
+          </button>
+        ))}
+        {compatible.length === 0 && <p>{language === "ru" ? "Нет устройств с подходящими разрешениями." : "No devices have the required sharing permission."}</p>}
+      </div>
+      {sent && <p className="quick-share-success">{language === "ru" ? "Отправлено — получатель увидит системное уведомление." : "Sent — the recipient will see a system notification."}</p>}
+      {error && <p className="setting-error" role="alert">{error}</p>}
+    </article>
+  );
+}
+
 function QuickShareWindow() {
   const [language] = useState<Language>(() => {
     const saved = window.localStorage.getItem("homeplace-language");
@@ -2124,6 +2287,7 @@ function QuickShareWindow() {
   const [targets, setTargets] = useState<ShareTarget[]>([]);
   const [payload, setPayload] = useState<QuickSharePayload | null>(null);
   const [text, setText] = useState("");
+  const [expanded, setExpanded] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -2141,8 +2305,11 @@ function QuickShareWindow() {
     let stopOpen: (() => void) | undefined;
     let stopStage: (() => void) | undefined;
     let stopDrop: (() => void) | undefined;
-    void listen("quick-share-opened", () => {
-      if (!cancelled) loadTargets();
+    void listen<boolean>("quick-share-opened", ({ payload: shouldExpand }) => {
+      if (!cancelled) {
+        setExpanded(shouldExpand);
+        loadTargets();
+      }
     }).then((unlisten) => {
       if (cancelled) unlisten(); else stopOpen = unlisten;
     });
@@ -2154,6 +2321,7 @@ function QuickShareWindow() {
     void getCurrentWebview().onDragDropEvent((event) => {
       if (cancelled) return;
       if (event.payload.type === "enter" || event.payload.type === "over") {
+        setExpanded(true);
         setDragging(true);
       } else if (event.payload.type === "leave") {
         setDragging(false);
@@ -2176,6 +2344,12 @@ function QuickShareWindow() {
       stopDrop?.();
     };
   }, []);
+
+  useEffect(() => {
+    void invoke("set_quick_share_expanded", { expanded }).catch((reason) => {
+      setError(errorMessage(reason));
+    });
+  }, [expanded]);
 
   function stageText(value: string) {
     setText(value);
@@ -2215,12 +2389,18 @@ function QuickShareWindow() {
 
   return (
     <main
-      className={`tray-share-root${dragging ? " dragging" : ""}`}
-      onMouseEnter={() => void invoke("set_quick_share_pointer_inside", { inside: true })}
-      onMouseLeave={() => void invoke("set_quick_share_pointer_inside", { inside: false })}
+      className={`tray-share-root${expanded ? " expanded" : ""}${dragging ? " dragging" : ""}`}
+      onMouseEnter={() => {
+        setExpanded(true);
+        void invoke("set_quick_share_pointer_inside", { inside: true });
+      }}
+      onMouseLeave={() => {
+        setExpanded(false);
+        void invoke("set_quick_share_pointer_inside", { inside: false });
+      }}
     >
       <section
-        className="quick-share-shelf open"
+        className={`quick-share-shelf${expanded ? " open" : ""}${dragging ? " dragging" : ""}`}
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => {
           event.preventDefault();
@@ -2228,12 +2408,21 @@ function QuickShareWindow() {
           if (dropped) stageText(dropped);
         }}
       >
-        <div className="tray-share-titlebar">
+        {!expanded && (
+          <button type="button" className="quick-share-handle" onClick={() => setExpanded(true)}>
+            <Icon name="transfer" size={17} />
+            <span>{language === "ru" ? "Перетащите сюда" : "Drop here"}</span>
+          </button>
+        )}
+        {expanded && <div className="tray-share-titlebar">
           <span><Icon name="transfer" size={17} /></span>
           <div><b>{language === "ru" ? "Быстрая отправка" : "Quick share"}</b><small>HomePlace Link</small></div>
-          <button type="button" onClick={() => void getCurrentWindow().hide()}>×</button>
-        </div>
-        <div className="quick-share-panel">
+          <button type="button" onClick={() => {
+            setExpanded(false);
+            void getCurrentWindow().hide();
+          }}>×</button>
+        </div>}
+        {expanded && <div className="quick-share-panel">
           <div className="quick-share-copy">
             <b>{language === "ru" ? "Перетащите файл из Finder" : "Drop a file from Finder"}</b>
             <small>{language === "ru" ? "Или вставьте текст или ссылку, затем выберите устройство." : "Or paste text or a link, then choose a device."}</small>
@@ -2265,7 +2454,7 @@ function QuickShareWindow() {
           </div>
           {sent && <p className="quick-share-success">{language === "ru" ? "Отправлено — ожидается подтверждение." : "Sent — waiting for approval."}</p>}
           {error && <p className="setting-error" role="alert">{error}</p>}
-        </div>
+        </div>}
       </section>
     </main>
   );

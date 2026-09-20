@@ -82,13 +82,14 @@ disappears from the manifest when unavailable or denied.
 
 ## Phase 4 — files and quick send
 
-Current progress: consent-gated receive and the first outbound quick-share flow
-are implemented with a native save dialog, a 64 MiB bound, strict offer
-validation, SHA-256 verification and temporary-file commit. The desktop shelf
-accepts a dropped file or pasted text/link and offers only compatible devices.
-Device owners can separately allow explicit household shares; seamless
-clipboard remains account-private. Progress, cancellation and resumable large
-transfers remain.
+Current progress: consent-gated receive and outbound quick sharing are
+implemented with a native save dialog, a 500 MiB per-file bound, strict offer
+validation, SHA-256 verification and temporary-file commit. The tray shelf
+stays compact until hovered or used as a drop target. The Transfers page accepts
+up to twenty selected or dropped files plus pasted text and links. Both surfaces
+offer only compatible devices. Device owners can separately allow explicit
+household shares; seamless clipboard remains account-private. Progress,
+cancellation and resumable large transfers remain.
 
 - Add a macOS Share Extension and a Windows packaged Share Target after stable
   platform signing is configured. Both must use the same recipient picker and

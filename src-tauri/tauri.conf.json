@@ -31,8 +31,8 @@
       {
         "label": "quick-share",
         "title": "HomePlace Quick Share",
-        "width": 420,
-        "height": 460,
+        "width": 176,
+        "height": 48,
         "visible": false,
         "resizable": false,
         "maximizable": false,

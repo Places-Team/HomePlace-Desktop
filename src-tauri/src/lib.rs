@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use platform::PlatformInfo;
 use serde::Serialize;
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
 
 static QUICK_SHARE_WAS_FOCUSED: AtomicBool = AtomicBool::new(false);
 
@@ -36,6 +37,75 @@ fn start_window_drag(window: tauri::WebviewWindow) -> Result<(), String> {
     window
         .start_dragging()
         .map_err(|_| "Could not start moving the HomePlace window.".to_string())
+}
+
+#[tauri::command]
+fn set_quick_share_expanded(window: tauri::WebviewWindow, expanded: bool) -> Result<(), String> {
+    if window.label() != "quick-share" {
+        return Err("Only the quick-share window can use shelf sizing.".into());
+    }
+    let scale = window
+        .scale_factor()
+        .map_err(|_| "Could not read the quick-share display scale.".to_string())?;
+    let old_position = window
+        .outer_position()
+        .map_err(|_| "Could not read the quick-share position.".to_string())?;
+    let old_size = window
+        .outer_size()
+        .map_err(|_| "Could not read the quick-share size.".to_string())?;
+    let logical_size = if expanded {
+        tauri::LogicalSize::new(420.0, 460.0)
+    } else {
+        tauri::LogicalSize::new(176.0, 48.0)
+    };
+    let physical_size = logical_size.to_physical::<u32>(scale);
+    let monitor = window
+        .current_monitor()
+        .map_err(|_| "Could not locate the quick-share display.".to_string())?;
+    let grows_up = monitor.as_ref().is_some_and(|monitor| {
+        old_position.y > monitor.position().y + monitor.size().height as i32 / 2
+    });
+    let mut x = old_position.x + (old_size.width as i32 - physical_size.width as i32) / 2;
+    let mut y = if grows_up {
+        old_position.y + old_size.height as i32 - physical_size.height as i32
+    } else {
+        old_position.y
+    };
+    if let Some(monitor) = monitor {
+        let min_x = monitor.position().x + 8;
+        let min_y = monitor.position().y + 8;
+        let max_x =
+            monitor.position().x + monitor.size().width as i32 - physical_size.width as i32 - 8;
+        let max_y =
+            monitor.position().y + monitor.size().height as i32 - physical_size.height as i32 - 8;
+        x = x.clamp(min_x, max_x.max(min_x));
+        y = y.clamp(min_y, max_y.max(min_y));
+    }
+    window
+        .set_size(logical_size)
+        .map_err(|_| "Could not resize the quick-share shelf.".to_string())?;
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|_| "Could not reposition the quick-share shelf.".to_string())
+}
+
+#[tauri::command]
+async fn pick_share_files(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let selected = app
+        .dialog()
+        .file()
+        .blocking_pick_files()
+        .unwrap_or_default();
+    selected
+        .into_iter()
+        .take(20)
+        .map(|selected| {
+            selected
+                .into_path()
+                .map(|path| path.to_string_lossy().into_owned())
+                .map_err(|_| "A selected file path is unavailable.".to_string())
+        })
+        .collect()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -105,6 +175,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             platform_info,
             start_window_drag,
+            set_quick_share_expanded,
+            pick_share_files,
             tray::open_quick_share,
             tray::set_quick_share_pointer_inside,
             startup::startup_status,

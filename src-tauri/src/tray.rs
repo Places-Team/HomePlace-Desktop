@@ -264,7 +264,7 @@ fn show_quick_share<R: Runtime>(app: &AppHandle<R>, tray_rect: Rect, focus: bool
     if focus {
         let _ = window.set_focus();
     }
-    let _ = app.emit("quick-share-opened", ());
+    let _ = app.emit("quick-share-opened", focus);
 }
 
 fn schedule_quick_share_hide<R: Runtime>(app: AppHandle<R>) {
