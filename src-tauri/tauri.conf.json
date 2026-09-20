@@ -14,13 +14,18 @@
       {
         "label": "main",
         "title": "HomePlace Desktop",
-        "width": 940,
-        "height": 720,
+        "width": 1200,
+        "height": 800,
         "minWidth": 720,
         "minHeight": 560,
         "center": true,
         "resizable": true,
+        "maximized": true,
         "fullscreen": false,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 18, "y": 18 },
         "transparent": false
       }
     ],

@@ -173,6 +173,8 @@ function visibleCalendarRange(monthOffset: number): { from: string; to: string }
 
 export function App() {
   const [activeSection, setActiveSection] = useState<AppSection>("overview");
+  const [sidebarHovered, setSidebarHovered] = useState(false);
+  const [sidebarFocused, setSidebarFocused] = useState(false);
   const [language, setLanguage] = useState<Language>(() => {
     const saved = window.localStorage.getItem("homeplace-language");
     if (saved === "en" || saved === "ru") return saved;
@@ -958,11 +960,20 @@ export function App() {
   }
 
   return (
-    <main className="desktop-shell">
+    <main className={`desktop-shell${sidebarHovered || sidebarFocused ? " sidebar-expanded" : ""}`}>
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
 
-      <aside className="app-sidebar" aria-label="Main navigation">
+      <aside
+        className="app-sidebar"
+        aria-label="Main navigation"
+        onMouseEnter={() => setSidebarHovered(true)}
+        onMouseLeave={() => setSidebarHovered(false)}
+        onFocusCapture={() => setSidebarFocused(true)}
+        onBlurCapture={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSidebarFocused(false);
+        }}
+      >
         <div className="sidebar-brand" data-tauri-drag-region>
           <div className="brand-mark" aria-hidden>
             <img src="/branding/homeplace-mark.png" alt="" />
