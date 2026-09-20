@@ -69,7 +69,30 @@ type ClipboardSyncStatus = {
   enabled: boolean;
 };
 
+type AppSection =
+  | "overview"
+  | "devices"
+  | "clipboard"
+  | "transfers"
+  | "automations"
+  | "notifications"
+  | "settings";
+
 const steps = ["Server", "Verify", "Approve", "Connected"];
+
+const navigation: Array<{
+  id: AppSection;
+  label: string;
+  icon: string;
+}> = [
+  { id: "overview", label: "Overview", icon: "⌂" },
+  { id: "devices", label: "Devices", icon: "◇" },
+  { id: "clipboard", label: "Clipboard", icon: "▣" },
+  { id: "transfers", label: "Transfers", icon: "⇄" },
+  { id: "automations", label: "Automations", icon: "⌁" },
+  { id: "notifications", label: "Notifications", icon: "◌" },
+  { id: "settings", label: "Settings", icon: "⚙" },
+];
 
 function errorMessage(error: unknown): string {
   return typeof error === "string" && error.trim()
@@ -95,6 +118,7 @@ function serverFromProfile(profile: ConnectionProfile): VerifiedServer {
 }
 
 export function App() {
+  const [activeSection, setActiveSection] = useState<AppSection>("overview");
   const [platform, setPlatform] = useState<PlatformInfo>(() =>
     fallbackPlatformInfo(navigator.userAgent),
   );
@@ -564,17 +588,55 @@ export function App() {
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
 
-      <header className="titlebar" data-tauri-drag-region>
-        <div className="brand-mark" aria-hidden>
-          H
+      <aside className="app-sidebar" aria-label="Main navigation">
+        <div className="sidebar-brand" data-tauri-drag-region>
+          <div className="brand-mark" aria-hidden>
+            H
+          </div>
+          <div>
+            <p className="eyebrow">HomePlace</p>
+            <strong>Link</strong>
+          </div>
         </div>
+
+        <nav className="sidebar-nav">
+          {navigation.map((item) => (
+            <button
+              type="button"
+              key={item.id}
+              className={activeSection === item.id ? "active" : undefined}
+              aria-current={activeSection === item.id ? "page" : undefined}
+              onClick={() => setActiveSection(item.id)}
+            >
+              <span aria-hidden>{item.icon}</span>
+              <span className="nav-label">{item.label}</span>
+              {item.id === "notifications" && notificationFailures > 0 && (
+                <small>{notificationFailures}</small>
+              )}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-status">
+          <span className={lastHeartbeat ? "online" : undefined} aria-hidden />
+          <div>
+            <b>{server?.serverName ?? "No server"}</b>
+            <small>{lastHeartbeat ? "Connected" : "Waiting for connection"}</small>
+          </div>
+        </div>
+      </aside>
+
+      <div className="app-content">
+
+      <header className="titlebar" data-tauri-drag-region>
         <div>
-          <p className="eyebrow">HomePlace Link</p>
-          <h1>Desktop</h1>
+          <p className="eyebrow">HomePlace Link · Desktop</p>
+          <h1>{navigation.find((item) => item.id === activeSection)?.label}</h1>
         </div>
         <span className="platform-pill">{platform.label}</span>
       </header>
 
+      {activeSection === "devices" && (
       <section className="glass-card hero-card">
         <div className="hero-copy">
           <p className="eyebrow">
@@ -895,7 +957,166 @@ export function App() {
           </section>
         )}
       </section>
+      )}
 
+      {activeSection === "overview" && (
+        <section className="section-stack" aria-label="Overview">
+          <article className="glass-card welcome-card">
+            <div>
+              <p className="eyebrow">Your personal device network</p>
+              <h2>{lastHeartbeat ? "Everything is connected." : "Connect your devices."}</h2>
+              <p className="lead">
+                Move text, files, links and actions between your computers,
+                phones and self-hosted services from one private place.
+              </p>
+            </div>
+            <button type="button" onClick={() => setActiveSection("devices")}>
+              {profiles.length > 0 ? "Manage devices" : "Connect a server"}
+            </button>
+          </article>
+
+          <section className="metric-grid" aria-label="Connection summary">
+            <button type="button" className="glass-card metric-card" onClick={() => setActiveSection("devices")}>
+              <span>◇</span>
+              <strong>{profiles.length}</strong>
+              <small>Paired server{profiles.length === 1 ? "" : "s"}</small>
+            </button>
+            <button type="button" className="glass-card metric-card" onClick={() => setActiveSection("transfers")}>
+              <span>⇄</span>
+              <strong>{pendingEvents}</strong>
+              <small>Pending transfer{pendingEvents === 1 ? "" : "s"}</small>
+            </button>
+            <button type="button" className="glass-card metric-card" onClick={() => setActiveSection("notifications")}>
+              <span>◌</span>
+              <strong>{deliveredNotifications}</strong>
+              <small>Notifications delivered</small>
+            </button>
+          </section>
+
+          <section className="quick-actions" aria-label="Quick actions">
+            <button type="button" onClick={() => setActiveSection("clipboard")}>
+              <span>▣</span><b>Clipboard</b><small>Sync copied text</small>
+            </button>
+            <button type="button" onClick={() => setActiveSection("transfers")}>
+              <span>⇄</span><b>Send a file</b><small>Secure device transfer</small>
+            </button>
+            <button type="button" onClick={() => setActiveSection("automations")}>
+              <span>⌁</span><b>Automation</b><small>Connect apps and actions</small>
+            </button>
+          </section>
+        </section>
+      )}
+
+      {activeSection === "clipboard" && (
+        <section className="section-stack" aria-label="Clipboard">
+          <article className="glass-card feature-hero">
+            <div className="feature-icon">▣</div>
+            <div>
+              <p className="eyebrow">Seamless text handoff</p>
+              <h2>Copy here. Paste there.</h2>
+              <p className="lead">
+                Newly copied text is relayed to your other paired devices.
+                Existing clipboard contents are never uploaded when you enable it.
+              </p>
+            </div>
+            <label className="switch-control">
+              <input
+                type="checkbox"
+                checked={clipboardSyncEnabled}
+                disabled={!clipboardSyncLoaded || clipboardSyncBusy || !activeServerId}
+                onChange={(event) => void updateClipboardSync(event.target.checked)}
+              />
+              <span>{clipboardSyncEnabled ? "On" : "Off"}</span>
+            </label>
+          </article>
+          {clipboardSyncError && <p className="setting-error">{clipboardSyncError}</p>}
+          <section className="capability-grid">
+            <article className="glass-card"><b>Text only</b><p>Formatting, whitespace and line breaks are preserved up to 8,000 characters.</p></article>
+            <article className="glass-card"><b>Loop protection</b><p>Content fingerprints stop copied text from bouncing endlessly between devices.</p></article>
+            <article className="glass-card"><b>Private relay</b><p>Only devices paired to the same HomePlace account can receive an update.</p></article>
+          </section>
+        </section>
+      )}
+
+      {activeSection === "transfers" && (
+        <section className="section-stack" aria-label="Transfers">
+          <article className="glass-card feature-hero compact">
+            <div className="feature-icon">⇄</div>
+            <div>
+              <p className="eyebrow">Cross-device handoff</p>
+              <h2>Transfers</h2>
+              <p className="lead">Receive text, links and verified files without exposing their contents to the interface.</p>
+            </div>
+          </article>
+          <article className="glass-card transfer-list">
+            <div className="section-heading"><div><p className="eyebrow">Inbox</p><h3>Waiting for approval</h3></div><span>{offers.length}</span></div>
+            {offers.length === 0 ? (
+              <div className="empty-state"><span>✓</span><b>Nothing waiting</b><p>Incoming links and files that require your approval will appear here.</p></div>
+            ) : offers.map((offer) => (
+              <div className="transfer-row" key={offer.id}>
+                <span>{offer.kind === "url" ? "↗" : offer.kind === "file" ? "↓" : "T"}</span>
+                <div><b>{offer.kind === "url" ? "Open link" : offer.kind === "file" ? "Save file" : "Copy text"}</b><small>From {offer.sourceName}</small></div>
+                <button type="button" disabled={offerBusy !== null} onClick={() => void handleOffer(offer, offer.kind === "url" ? "open" : offer.kind === "file" ? "save" : "copy")}>Accept</button>
+                <button type="button" disabled={offerBusy !== null} onClick={() => void handleOffer(offer, "decline")}>Decline</button>
+              </div>
+            ))}
+          </article>
+          <article className="glass-card planned-action"><span>＋</span><div><b>Send from this computer</b><p>Device picker, drag-and-drop files and link sending are the next transfer milestone.</p></div><small>Coming next</small></article>
+        </section>
+      )}
+
+      {activeSection === "automations" && (
+        <section className="section-stack" aria-label="Automations">
+          <article className="glass-card feature-hero compact">
+            <div className="feature-icon">⌁</div><div><p className="eyebrow">Link rules</p><h2>Automations</h2><p className="lead">Create private flows between devices, Home Assistant and self-hosted services.</p></div><span className="preview-badge">Preview</span>
+          </article>
+          <section className="automation-list">
+            <article className="glass-card automation-row"><span>Android</span><b>Magnet link received</b><i>→</i><span>qBittorrent</span><small>Planned</small></article>
+            <article className="glass-card automation-row"><span>Gaming PC</span><b>Game launched</b><i>→</i><span>Home Assistant scene</span><small>Planned</small></article>
+            <article className="glass-card automation-row"><span>MacBook</span><b>Arrives home</b><i>→</i><span>Wake work PC</span><small>Planned</small></article>
+          </section>
+          <button type="button" className="primary-action" disabled>Create automation</button>
+        </section>
+      )}
+
+      {activeSection === "notifications" && (
+        <section className="section-stack" aria-label="Notifications">
+          <section className="metric-grid notification-metrics">
+            <article className="glass-card metric-card"><span>✓</span><strong>{deliveredNotifications}</strong><small>Delivered</small></article>
+            <article className="glass-card metric-card"><span>!</span><strong>{notificationFailures}</strong><small>Need attention</small></article>
+            <article className="glass-card metric-card"><span>◌</span><strong>{lastHeartbeat ? "Live" : "—"}</strong><small>Device channel</small></article>
+          </section>
+          <article className="glass-card settings-panel">
+            <div className="section-heading"><div><p className="eyebrow">Delivery</p><h3>Notification routes</h3></div></div>
+            <div className="settings-row"><span><b>Desktop notifications</b><small>Show HomePlace events through the native notification centre.</small></span><em>Enabled</em></div>
+            <div className="settings-row"><span><b>Telegram health alerts</b><small>HomePlace monitors configured bots and reports availability failures.</small></span><em>Managed on server</em></div>
+            <div className="settings-row"><span><b>Mobile approval requests</b><small>Approve sensitive desktop actions from your paired phone.</small></span><em>Planned</em></div>
+          </article>
+        </section>
+      )}
+
+      {activeSection === "settings" && (
+        <section className="section-stack" aria-label="Settings">
+          <article className="glass-card settings-panel">
+            <div className="section-heading"><div><p className="eyebrow">Application</p><h3>General</h3></div></div>
+            <label className="settings-row"><span><b>Start at login</b><small>Launch hidden and keep HomePlace available in the system tray.</small></span><input type="checkbox" checked={startupEnabled} disabled={!startupLoaded || startupBusy} onChange={(event) => void updateStartup(event.target.checked)} /></label>
+            <label className="settings-row"><span><b>Seamless clipboard sync</b><small>Automatically relay newly copied text between paired devices.</small></span><input type="checkbox" checked={clipboardSyncEnabled} disabled={!clipboardSyncLoaded || clipboardSyncBusy || !activeServerId} onChange={(event) => void updateClipboardSync(event.target.checked)} /></label>
+            {(startupError || clipboardSyncError) && <p className="setting-error">{startupError ?? clipboardSyncError}</p>}
+          </article>
+          <article className="glass-card settings-panel">
+            <div className="section-heading"><div><p className="eyebrow">Connection</p><h3>{server?.serverName ?? "HomePlace server"}</h3></div><span className={lastHeartbeat ? "status-chip online" : "status-chip"}>{lastHeartbeat ? "Online" : "Offline"}</span></div>
+            <div className="settings-row static"><span><b>Server address</b><small>{server?.address ?? "No server paired"}</small></span></div>
+            <div className="settings-row static"><span><b>Credential storage</b><small>{platform.secureStorage} · separate identity for every server</small></span></div>
+            <div className="settings-actions"><button type="button" onClick={() => void reconnectNow()} disabled={!activeServerId || reconnecting}>Reconnect</button><button type="button" onClick={() => setActiveSection("devices")}>Manage servers</button></div>
+          </article>
+          <article className="glass-card settings-panel muted-panel">
+            <div className="section-heading"><div><p className="eyebrow">About</p><h3>HomePlace Link Desktop</h3></div><span>v0.1.0</span></div>
+            <p>Protocol v1 · Platform-native companion for {platform.label}</p>
+          </article>
+        </section>
+      )}
+
+      {activeSection === "overview" && (
       <section className="details-grid">
         <article className="glass-card detail-card">
           <div className="detail-icon">◇</div>
@@ -921,11 +1142,13 @@ export function App() {
           </div>
         </article>
       </section>
+      )}
 
       <footer>
         <span>HomePlace Link protocol v1</span>
         <span>Secrets stay in platform secure storage</span>
       </footer>
+      </div>
     </main>
   );
 }

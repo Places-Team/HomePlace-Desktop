@@ -67,6 +67,11 @@ forgotten independently without exposing their credentials. Realtime transport
 is the next connection milestone. A second launch reuses the existing process,
 opens its window and requests an immediate reconnect.
 
+The desktop shell provides a compact icon rail that expands on hover or
+keyboard focus, with dedicated views for overview, devices, clipboard,
+transfers, automations, notifications and settings. Implemented capabilities
+remain interactive while future flows are clearly marked as previews.
+
 The first functional milestone is pairing with a HomePlace server, storing the
 device credential securely and reporting presence from the system tray.
 
