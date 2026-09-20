@@ -75,6 +75,7 @@ type AppSection =
   | "clipboard"
   | "transfers"
   | "automations"
+  | "productivity"
   | "notifications"
   | "settings";
 
@@ -90,6 +91,7 @@ const navigation: Array<{
   { id: "clipboard", label: "Clipboard", icon: "▣" },
   { id: "transfers", label: "Transfers", icon: "⇄" },
   { id: "automations", label: "Automations", icon: "⌁" },
+  { id: "productivity", label: "Productivity", icon: "□" },
   { id: "notifications", label: "Notifications", icon: "◌" },
   { id: "settings", label: "Settings", icon: "⚙" },
 ];
@@ -368,6 +370,26 @@ export function App() {
   const current = progressIndex(state);
   const busy = state === "verifying" || state === "requesting" || profileBusy;
   const isAddingServer = state !== "connected" && profiles.length > 0;
+  const today = new Date();
+  const monthLabel = today.toLocaleDateString("en", {
+    month: "long",
+    year: "numeric",
+  });
+  const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+  const mondayOffset = (firstDay.getDay() + 6) % 7;
+  const calendarDays = Array.from({ length: 42 }, (_, index) => {
+    const value = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      index - mondayOffset + 1,
+    );
+    return {
+      key: value.toISOString(),
+      day: value.getDate(),
+      currentMonth: value.getMonth() === today.getMonth(),
+      isToday: value.toDateString() === today.toDateString(),
+    };
+  });
 
   function clearConnectionHealth() {
     setLastHeartbeat(null);
@@ -1076,6 +1098,111 @@ export function App() {
             <article className="glass-card automation-row"><span>MacBook</span><b>Arrives home</b><i>→</i><span>Wake work PC</span><small>Planned</small></article>
           </section>
           <button type="button" className="primary-action" disabled>Create automation</button>
+        </section>
+      )}
+
+      {activeSection === "productivity" && (
+        <section className="section-stack productivity-page" aria-label="Productivity">
+          <article className="glass-card productivity-hero">
+            <div>
+              <p className="eyebrow">Your day across every device</p>
+              <h2>One place to plan and continue.</h2>
+              <p className="lead">
+                Calendar, reminders, focus sessions and cross-device handoff
+                will stay in sync through your own HomePlace server.
+              </p>
+            </div>
+            <span className="preview-badge">Workspace preview</span>
+          </article>
+
+          <div className="productivity-layout">
+            <article className="glass-card calendar-card">
+              <div className="section-heading calendar-heading">
+                <div>
+                  <p className="eyebrow">Calendar</p>
+                  <h3>{monthLabel}</h3>
+                </div>
+                <div className="calendar-actions" aria-label="Calendar navigation preview">
+                  <button type="button" disabled aria-label="Previous month">‹</button>
+                  <button type="button" disabled>Today</button>
+                  <button type="button" disabled aria-label="Next month">›</button>
+                </div>
+              </div>
+              <div className="calendar-weekdays" aria-hidden>
+                {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => <span key={day}>{day}</span>)}
+              </div>
+              <div className="calendar-grid" aria-label={monthLabel}>
+                {calendarDays.map((day) => (
+                  <button
+                    type="button"
+                    key={day.key}
+                    className={`${day.currentMonth ? "" : "outside"} ${day.isToday ? "today" : ""}`}
+                    disabled
+                    aria-current={day.isToday ? "date" : undefined}
+                  >
+                    {day.day}
+                  </button>
+                ))}
+              </div>
+              <div className="calendar-source-row">
+                <span><i className="source-dot personal" />Personal</span>
+                <span><i className="source-dot home" />HomePlace</span>
+                <small>CalDAV and external calendars planned</small>
+              </div>
+            </article>
+
+            <aside className="productivity-side">
+              <article className="glass-card agenda-card">
+                <div className="section-heading">
+                  <div><p className="eyebrow">Today</p><h3>Agenda</h3></div>
+                  <span>{today.getDate()}</span>
+                </div>
+                <div className="agenda-empty">
+                  <span>□</span>
+                  <b>Your day is clear</b>
+                  <p>Calendar events will appear after a source is connected.</p>
+                </div>
+                <button type="button" className="subtle-action" disabled>＋ Add event</button>
+              </article>
+
+              <article className="glass-card focus-card">
+                <div>
+                  <p className="eyebrow">Focus</p>
+                  <h3>25:00</h3>
+                  <small>Silence HomePlace notifications on every device.</small>
+                </div>
+                <button type="button" disabled>Start</button>
+              </article>
+            </aside>
+          </div>
+
+          <article className="glass-card reminders-card">
+            <div className="section-heading">
+              <div><p className="eyebrow">Reminders</p><h3>Tasks that follow you</h3></div>
+              <button type="button" className="subtle-action" disabled>＋ New reminder</button>
+            </div>
+            <div className="reminder-grid">
+              <div className="reminder-column">
+                <b>Today</b>
+                <div className="reminder-preview"><span />Review HomePlace device alerts<small>Notification on phone and desktop</small></div>
+              </div>
+              <div className="reminder-column">
+                <b>Upcoming</b>
+                <div className="reminder-preview"><span />Plan weekly server maintenance<small>HomePlace calendar</small></div>
+              </div>
+              <div className="reminder-column">
+                <b>Smart lists</b>
+                <div className="smart-list-row"><span>⌂</span>At home <small>0</small></div>
+                <div className="smart-list-row"><span>◇</span>On this device <small>0</small></div>
+              </div>
+            </div>
+          </article>
+
+          <section className="productivity-features">
+            <article className="glass-card"><span>↗</span><div><b>Continue on another device</b><p>Open the active document, link or app on a paired computer.</p></div><small>Planned</small></article>
+            <article className="glass-card"><span>⌁</span><div><b>Context automations</b><p>Start Home Assistant scenes when focus or calendar states change.</p></div><small>Planned</small></article>
+            <article className="glass-card"><span>◌</span><div><b>Smart reminders</b><p>Notify the right device based on presence, battery and network.</p></div><small>Planned</small></article>
+          </section>
         </section>
       )}
 
