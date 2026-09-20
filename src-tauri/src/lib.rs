@@ -29,7 +29,15 @@ fn platform_info() -> BootstrapInfo {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(
+            |app, _arguments, _working_directory| {
+                tray::show_main_window(app);
+                if let Some(service) = app.try_state::<link::client::HeartbeatService>() {
+                    service.wake();
+                }
+            },
+        ))
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .args(["--hidden"])
@@ -73,6 +81,20 @@ pub fn run() {
             link::client::request_heartbeat,
             link::client::disconnect_device
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run HomePlace Desktop");
+        .build(tauri::generate_context!())
+        .expect("failed to build HomePlace Desktop");
+
+    app.run(|app, event| match event {
+        tauri::RunEvent::Resumed => {
+            if let Some(service) = app.try_state::<link::client::HeartbeatService>() {
+                service.wake();
+            }
+        }
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen {
+            has_visible_windows: false,
+            ..
+        } => tray::show_main_window(app),
+        _ => {}
+    });
 }

@@ -27,7 +27,7 @@ pub struct HeartbeatService {
 }
 
 impl HeartbeatService {
-    fn wake(&self) {
+    pub fn wake(&self) {
         let _ = self.wake.try_send(());
     }
 }

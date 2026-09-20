@@ -53,8 +53,10 @@ Exit criteria: presence remains accurate across sleep, wake, network changes,
 logout and server restart.
 
 Current progress: the cross-platform tray, close-to-background lifecycle and
-native heartbeat scheduler are implemented. Platform-specific tray polish,
-sleep/wake integration and realtime transport remain.
+native heartbeat scheduler are implemented. Resume events and explicit tray
+reconnect requests bypass the current backoff, while the single-instance guard
+prevents duplicate heartbeat workers. Platform-specific tray polish and
+realtime transport remain.
 
 ## Phase 3 — notifications, URLs and clipboard
 

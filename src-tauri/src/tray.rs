@@ -13,14 +13,16 @@ static BACKGROUND_NOTICE_SHOWN: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, PartialEq, Eq)]
 enum TrayCommand {
     Show,
+    Reconnect,
     Quit,
 }
 
 pub fn install(app: &App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open HomePlace", true, None::<&str>)?;
+    let reconnect = MenuItem::with_id(app, "reconnect", "Reconnect now", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit HomePlace", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &reconnect, &separator, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("HomePlace Desktop")
@@ -28,6 +30,11 @@ pub fn install(app: &App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match tray_command(event.id().as_ref()) {
             Some(TrayCommand::Show) => show_main_window(app),
+            Some(TrayCommand::Reconnect) => {
+                if let Some(service) = app.try_state::<crate::link::client::HeartbeatService>() {
+                    service.wake();
+                }
+            }
             Some(TrayCommand::Quit) => app.exit(0),
             None => {}
         })
@@ -97,6 +104,7 @@ pub enum ConnectionState {
 fn tray_command(id: &str) -> Option<TrayCommand> {
     match id {
         "open" => Some(TrayCommand::Show),
+        "reconnect" => Some(TrayCommand::Reconnect),
         "quit" => Some(TrayCommand::Quit),
         _ => None,
     }
@@ -109,6 +117,7 @@ mod tests {
     #[test]
     fn maps_only_known_tray_commands() {
         assert_eq!(tray_command("open"), Some(TrayCommand::Show));
+        assert_eq!(tray_command("reconnect"), Some(TrayCommand::Reconnect));
         assert_eq!(tray_command("quit"), Some(TrayCommand::Quit));
         assert_eq!(tray_command("notification.deliver"), None);
     }
