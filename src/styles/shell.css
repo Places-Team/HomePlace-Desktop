@@ -36,6 +36,7 @@
 
 .sidebar-brand { display: flex; align-items: center; gap: 11px; min-height: 52px; padding: 0 4px 14px; }
 .sidebar-brand .brand-mark { width: 40px; height: 40px; flex: 0 0 auto; border-radius: 12px; font-size: 14px; }
+.sidebar-brand .brand-mark img { width: 26px; height: 26px; object-fit: contain; filter: invert(1); }
 .sidebar-brand .eyebrow { margin-bottom: 2px; font-size: 8px; }
 .sidebar-brand strong { font-size: 14px; letter-spacing: -0.015em; }
 .sidebar-brand > div:last-child {

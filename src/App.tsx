@@ -965,7 +965,7 @@ export function App() {
       <aside className="app-sidebar" aria-label="Main navigation">
         <div className="sidebar-brand" data-tauri-drag-region>
           <div className="brand-mark" aria-hidden>
-            H
+            <img src="/branding/homeplace-mark.png" alt="" />
           </div>
           <div>
             <p className="eyebrow">HomePlace</p>
