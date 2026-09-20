@@ -1062,6 +1062,8 @@ function MainApp() {
               key={item.id}
               className={activeSection === item.id ? "active" : undefined}
               aria-current={activeSection === item.id ? "page" : undefined}
+              aria-label={ui.nav[item.id]}
+              title={ui.nav[item.id]}
               onClick={() => setActiveSection(item.id)}
             >
               <Icon name={item.icon} size={22} className="nav-icon" />
