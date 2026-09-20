@@ -56,7 +56,7 @@ type HeartbeatUpdate =
 
 type ShareOfferSummary = {
   id: string;
-  kind: "url" | "text";
+  kind: "url" | "text" | "file";
   sourceName: string;
   sentAt: string;
 };
@@ -465,7 +465,7 @@ export function App() {
 
   async function handleOffer(
     offer: ShareOfferSummary,
-    action: "open" | "copy" | "decline",
+    action: "open" | "copy" | "save" | "decline",
   ) {
     if (offerBusy) return;
     setOfferBusy(offer.id);
@@ -741,10 +741,16 @@ export function App() {
                 {offers.map((offer) => (
                   <article key={offer.id} className="offer-row">
                     <span className="offer-icon" aria-hidden>
-                      {offer.kind === "url" ? "↗" : "T"}
+                      {offer.kind === "url" ? "↗" : offer.kind === "file" ? "↓" : "T"}
                     </span>
                     <span className="offer-copy">
-                      <b>{offer.kind === "url" ? "Open link" : "Copy text"}</b>
+                      <b>
+                        {offer.kind === "url"
+                          ? "Open link"
+                          : offer.kind === "file"
+                            ? "Save file"
+                            : "Copy text"}
+                      </b>
                       <small>
                         From {offer.sourceName} ·{" "}
                         {new Date(offer.sentAt).toLocaleTimeString([], {
@@ -759,7 +765,11 @@ export function App() {
                       onClick={() =>
                         void handleOffer(
                           offer,
-                          offer.kind === "url" ? "open" : "copy",
+                          offer.kind === "url"
+                            ? "open"
+                            : offer.kind === "file"
+                              ? "save"
+                              : "copy",
                         )
                       }
                     >

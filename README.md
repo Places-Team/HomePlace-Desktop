@@ -49,7 +49,10 @@ shared text and clipboard offers wait for explicit approval before Rust opens
 the browser or writes to the system clipboard; their content is never exposed
 to the web interface. Events are acknowledged only after the approved local
 action. Revocation, secure local forgetting and credential cleanup are also
-supported. The native tray keeps Link active after
+supported. Desktop can receive bounded files through a native save dialog,
+verify their size and SHA-256 in Rust and commit them through a temporary file
+without exposing file metadata or contents to the React interface. The native
+tray keeps Link active after
 the window closes, and the Rust heartbeat service continues independently of
 the interface. Users can explicitly enable start-at-login, which launches Link
 hidden in the tray without enabling itself by default. Multiple HomePlace

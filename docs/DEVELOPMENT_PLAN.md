@@ -77,6 +77,11 @@ disappears from the manifest when unavailable or denied.
 
 ## Phase 4 — files and quick send
 
+Current progress: consent-gated small-file receive is implemented with a
+native save dialog, a 5 MiB limit, strict offer validation, streamed SHA-256
+verification and temporary-file commit. File metadata and contents remain in
+Rust. Sending, progress, cancellation and resumable large transfers remain.
+
 - Add drag-and-drop and share-to-device flows.
 - Implement bounded small transfers followed by resumable large transfers.
 - Verify size, checksum, recipient and expiry before saving.
@@ -96,6 +101,15 @@ and expired or cross-user claims cannot retrieve a file.
 
 Exit criteria: no arbitrary command path exists and permission removal makes
 the related action unavailable immediately.
+
+## Future — phone-confirmed desktop sign-in
+
+- Allow a paired HomePlace Mobile device to approve an interactive sign-in on Windows, macOS or Linux.
+- Bind every approval to the exact computer, local user, one-time nonce and short expiry.
+- Show matching confirmation details on the computer and phone before approval.
+- Keep the normal operating-system credential or platform biometric as a fallback.
+- Never treat HomePlace approval as a replacement for disk encryption, secure boot or account recovery.
+- Support immediate device revocation and an administrator-visible audit trail.
 
 ## Phase 6 — handoff and continuity
 

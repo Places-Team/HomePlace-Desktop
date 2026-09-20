@@ -1,5 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
+    fs::{self, OpenOptions},
+    io::Write,
+    path::Path,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -7,8 +10,10 @@ use std::{
 use futures_util::StreamExt;
 use reqwest::{Client, Response, redirect::Policy};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
@@ -24,6 +29,7 @@ use super::{
 use crate::platform;
 
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_SHARE_FILE_BYTES: usize = 5 * 1024 * 1024;
 const HEARTBEAT_EVENT: &str = "link-heartbeat";
 const HEALTHY_HEARTBEAT_SECONDS: u64 = 30;
 const MAX_RETRY_SECONDS: u64 = 5 * 60;
@@ -129,6 +135,16 @@ struct PendingShareOffer {
 enum ShareContent {
     Url(String),
     Text(String),
+    File(FileOffer),
+}
+
+#[derive(Clone, Debug)]
+struct FileOffer {
+    transfer_id: String,
+    filename: String,
+    mime_type: String,
+    size: usize,
+    sha256: String,
 }
 
 type OfferStore = Arc<Mutex<HashMap<String, PendingShareOffer>>>;
@@ -724,6 +740,7 @@ fn sync_share_offers(
         let kind = match offer.content {
             ShareContent::Url(_) => "link",
             ShareContent::Text(_) => "text",
+            ShareContent::File(_) => "file",
         };
         let _ = app
             .notification()
@@ -746,14 +763,12 @@ fn pending_share_offer(event: &HeartbeatEvent, server_id: &str) -> Option<Pendin
         "clipboard.offer" => {
             ShareContent::Text(valid_offer_text(event.payload.get("text")?.as_str()?)?)
         }
-        "share.offer" => {
-            let value = event.payload.get("value")?.as_str()?;
-            match event.payload.get("type")?.as_str()? {
-                "url" => ShareContent::Url(valid_offer_url(value)?),
-                "text" => ShareContent::Text(valid_offer_text(value)?),
-                _ => return None,
-            }
-        }
+        "share.offer" => match event.payload.get("type")?.as_str()? {
+            "url" => ShareContent::Url(valid_offer_url(event.payload.get("value")?.as_str()?)?),
+            "text" => ShareContent::Text(valid_offer_text(event.payload.get("value")?.as_str()?)?),
+            "file" => ShareContent::File(valid_file_offer(&event.payload)?),
+            _ => return None,
+        },
         _ => return None,
     };
     Some(PendingShareOffer {
@@ -793,6 +808,50 @@ fn valid_offer_url(value: &str) -> Option<String> {
     Some(url.to_string())
 }
 
+fn valid_file_offer(payload: &serde_json::Value) -> Option<FileOffer> {
+    let transfer_id = payload.get("transferId")?.as_str()?;
+    if !safe_identifier(transfer_id) {
+        return None;
+    }
+    let filename = payload.get("filename")?.as_str()?.trim();
+    if filename.is_empty()
+        || filename.chars().count() > 180
+        || filename == "."
+        || filename == ".."
+        || filename
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '/' | '\\'))
+    {
+        return None;
+    }
+    let mime_type = payload.get("mimeType")?.as_str()?.trim();
+    if mime_type.is_empty()
+        || mime_type.chars().count() > 120
+        || mime_type.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let size = usize::try_from(payload.get("size")?.as_u64()?).ok()?;
+    if size == 0 || size > MAX_SHARE_FILE_BYTES {
+        return None;
+    }
+    let sha256 = payload.get("sha256")?.as_str()?;
+    if sha256.len() != 64
+        || !sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    Some(FileOffer {
+        transfer_id: transfer_id.to_owned(),
+        filename: filename.to_owned(),
+        mime_type: mime_type.to_owned(),
+        size,
+        sha256: sha256.to_owned(),
+    })
+}
+
 fn offer_key(server_id: &str, event_id: &str) -> String {
     format!("{server_id}:{event_id}")
 }
@@ -809,6 +868,7 @@ fn offer_summaries(offers: &OfferStore, server_id: &str) -> Result<Vec<ShareOffe
             kind: match offer.content {
                 ShareContent::Url(_) => "url".into(),
                 ShareContent::Text(_) => "text".into(),
+                ShareContent::File(_) => "file".into(),
             },
             source_name: offer.source_name.clone(),
             sent_at: offer.sent_at.clone(),
@@ -839,6 +899,7 @@ pub async fn resolve_share_offer(
         .get(&key)
         .cloned()
         .ok_or_else(|| "The HomePlace offer is no longer available.".to_string())?;
+    let credential = identity::load_credential(&profile.server_id)?;
 
     match (action.as_str(), &offer.content) {
         ("open", ShareContent::Url(url)) => app
@@ -849,11 +910,15 @@ pub async fn resolve_share_offer(
             .clipboard()
             .write_text(text)
             .map_err(|_| "The text could not be copied to clipboard.".to_string())?,
+        ("save", ShareContent::File(file)) => {
+            if !save_received_file(&app, &profile, credential.as_str(), file).await? {
+                return offer_summaries(&service.offers, &profile.server_id);
+            }
+        }
         ("decline", _) => {}
         _ => return Err("The requested HomePlace offer action is not allowed.".into()),
     }
 
-    let credential = identity::load_credential(&profile.server_id)?;
     heartbeat_request(&profile, credential.as_str(), &[event_id]).await?;
     service
         .offers
@@ -862,6 +927,136 @@ pub async fn resolve_share_offer(
         .remove(&key);
     service.wake();
     offer_summaries(&service.offers, &profile.server_id)
+}
+
+async fn save_received_file(
+    app: &AppHandle,
+    profile: &StoredProfile,
+    credential: &str,
+    offer: &FileOffer,
+) -> Result<bool, String> {
+    let Some(selected) = app
+        .dialog()
+        .file()
+        .set_file_name(&offer.filename)
+        .blocking_save_file()
+    else {
+        return Ok(false);
+    };
+    let destination = selected
+        .as_path()
+        .ok_or_else(|| "Only local file destinations are supported.".to_string())?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join(&format!("api/link/mobile/share/file/{}", offer.transfer_id))
+        .map_err(|_| "Could not create the HomePlace file address.".to_string())?;
+    let response = http_client()?
+        .get(endpoint)
+        .header("Accept", "application/octet-stream")
+        .bearer_auth(credential)
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    if response.status().as_u16() == 401 {
+        return Err("HomePlace rejected this device credential. Pair the device again.".into());
+    }
+    ensure_success(&response, "file download")?;
+    if response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some(offer.mime_type.as_str())
+    {
+        return Err("The received file type does not match the offer.".into());
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length != offer.size as u64)
+    {
+        return Err("The received file size does not match the offer.".into());
+    }
+    if response
+        .headers()
+        .get("x-homeplace-sha256")
+        .and_then(|value| value.to_str().ok())
+        != Some(offer.sha256.as_str())
+    {
+        return Err("The received file checksum header does not match the offer.".into());
+    }
+
+    let mut bytes = Vec::with_capacity(offer.size);
+    let mut hasher = Sha256::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| "The shared file could not be downloaded.".to_string())?;
+        if bytes.len().saturating_add(chunk.len()) > offer.size
+            || bytes.len().saturating_add(chunk.len()) > MAX_SHARE_FILE_BYTES
+        {
+            return Err("The shared file is larger than the approved offer.".into());
+        }
+        hasher.update(&chunk);
+        bytes.extend_from_slice(&chunk);
+    }
+    let actual_sha256 = format!("{:x}", hasher.finalize());
+    if !file_integrity_matches(offer.size, &offer.sha256, bytes.len(), &actual_sha256) {
+        return Err("The shared file failed its integrity check.".into());
+    }
+
+    write_verified_file(destination, &bytes)?;
+    Ok(true)
+}
+
+fn file_integrity_matches(
+    expected_size: usize,
+    expected_sha256: &str,
+    actual_size: usize,
+    actual_sha256: &str,
+) -> bool {
+    actual_size == expected_size && actual_sha256 == expected_sha256
+}
+
+fn write_verified_file(destination: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "The selected file destination is invalid.".to_string())?;
+    let file_name = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| "The selected file name is invalid.".to_string())?;
+    let temporary = parent.join(format!(
+        ".{file_name}.homeplace-{}.part",
+        uuid::Uuid::new_v4()
+    ));
+    let result = (|| -> Result<(), String> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|_| {
+                "Could not create a temporary file at the selected destination.".to_string()
+            })?;
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "Could not safely write the shared file.".to_string())?;
+        drop(file);
+        #[cfg(target_os = "windows")]
+        if destination.exists() {
+            fs::remove_file(destination)
+                .map_err(|_| "Could not replace the selected Windows file.".to_string())?;
+        }
+        fs::rename(&temporary, destination).map_err(|_| {
+            "Could not move the shared file into its selected destination.".to_string()
+        })?;
+        #[cfg(unix)]
+        if let Ok(directory) = fs::File::open(parent) {
+            let _ = directory.sync_all();
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[tauri::command]
@@ -1314,6 +1509,70 @@ mod tests {
         };
         let serialized = serde_json::to_value(summary).unwrap().to_string();
         assert!(!serialized.contains("example.net"));
+    }
+
+    #[test]
+    fn validates_file_offers_without_exposing_sensitive_metadata() {
+        let event = share_event(
+            "share.offer",
+            serde_json::json!({
+                "type": "file",
+                "transferId": "transfer_123",
+                "filename": "private-document.pdf",
+                "mimeType": "application/pdf",
+                "size": 1024,
+                "sha256": "a".repeat(64),
+                "sourceName": "Phone"
+            }),
+        );
+        let offer = pending_share_offer(&event, "server").unwrap();
+        assert!(matches!(offer.content, ShareContent::File(_)));
+        let store = Arc::new(Mutex::new(HashMap::from([(
+            offer_key(&offer.server_id, &offer.id),
+            offer,
+        )])));
+        let serialized =
+            serde_json::to_string(&offer_summaries(&store, "server").unwrap()).unwrap();
+        assert!(serialized.contains("\"kind\":\"file\""));
+        assert!(!serialized.contains("private-document"));
+        assert!(!serialized.contains("transfer_123"));
+        assert!(!serialized.contains(&"a".repeat(64)));
+    }
+
+    #[test]
+    fn rejects_invalid_file_offers() {
+        for payload in [
+            serde_json::json!({
+                "type": "file", "transferId": "transfer_123", "filename": "../escape",
+                "mimeType": "application/octet-stream", "size": 12, "sha256": "a".repeat(64),
+                "sourceName": "Phone"
+            }),
+            serde_json::json!({
+                "type": "file", "transferId": "bad/id", "filename": "safe.bin",
+                "mimeType": "application/octet-stream", "size": 12, "sha256": "a".repeat(64),
+                "sourceName": "Phone"
+            }),
+            serde_json::json!({
+                "type": "file", "transferId": "transfer_123", "filename": "safe.bin",
+                "mimeType": "application/octet-stream", "size": MAX_SHARE_FILE_BYTES + 1,
+                "sha256": "a".repeat(64), "sourceName": "Phone"
+            }),
+            serde_json::json!({
+                "type": "file", "transferId": "transfer_123", "filename": "safe.bin",
+                "mimeType": "application/octet-stream", "size": 12, "sha256": "not-a-hash",
+                "sourceName": "Phone"
+            }),
+        ] {
+            assert!(pending_share_offer(&share_event("share.offer", payload), "server").is_none());
+        }
+    }
+
+    #[test]
+    fn rejects_file_size_and_checksum_mismatches() {
+        let expected = "a".repeat(64);
+        assert!(file_integrity_matches(12, &expected, 12, &expected));
+        assert!(!file_integrity_matches(12, &expected, 11, &expected));
+        assert!(!file_integrity_matches(12, &expected, 12, &"b".repeat(64)));
     }
 
     #[test]
