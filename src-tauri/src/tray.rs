@@ -2,7 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tauri::{
-    App, AppHandle, Emitter, Manager, PhysicalPosition, Rect, Runtime,
+    App, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Rect, Runtime,
+    Size,
     menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
@@ -15,6 +16,7 @@ static QUICK_SHARE_POINTER_INSIDE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, PartialEq, Eq)]
 enum TrayCommand {
+    QuickShare,
     Show,
     Reconnect,
     Quit,
@@ -58,6 +60,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
             }
 
             match tray_command(id) {
+                Some(TrayCommand::QuickShare) => show_quick_share_near_cursor(app),
                 Some(TrayCommand::Show) => show_main_window(app),
                 Some(TrayCommand::Reconnect) => {
                     if let Some(service) = app.try_state::<crate::link::client::HeartbeatService>()
@@ -96,6 +99,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
 }
 
 fn build_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>> {
+    let quick_share = MenuItem::with_id(app, "quick-share", "Quick Share", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open HomePlace", true, None::<&str>)?;
     let reconnect = MenuItem::with_id(app, "reconnect", "Reconnect now", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
@@ -138,7 +142,24 @@ fn build_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>> {
         .collect();
     let servers = Submenu::with_items(app, "Servers", true, &profile_refs)?;
 
-    Menu::with_items(app, &[&open, &servers, &reconnect, &separator, &quit])
+    Menu::with_items(
+        app,
+        &[&quick_share, &open, &servers, &reconnect, &separator, &quit],
+    )
+}
+
+fn show_quick_share_near_cursor<R: Runtime>(app: &AppHandle<R>) {
+    let Ok(cursor) = app.cursor_position() else {
+        return;
+    };
+    let rect = Rect {
+        position: Position::Physical(PhysicalPosition::new(
+            cursor.x.round() as i32,
+            cursor.y.round() as i32,
+        )),
+        size: Size::Physical(PhysicalSize::new(1, 1)),
+    };
+    show_quick_share(app, rect, true);
 }
 
 pub fn refresh_menu<R: Runtime>(app: &AppHandle<R>) {
@@ -238,6 +259,7 @@ pub fn notify_window_hidden<R: Runtime>(app: &AppHandle<R>) {
 
 fn tray_command(id: &str) -> Option<TrayCommand> {
     match id {
+        "quick-share" => Some(TrayCommand::QuickShare),
         "open" => Some(TrayCommand::Show),
         "reconnect" => Some(TrayCommand::Reconnect),
         "quit" => Some(TrayCommand::Quit),
@@ -265,6 +287,7 @@ mod tests {
 
     #[test]
     fn maps_only_known_tray_commands() {
+        assert_eq!(tray_command("quick-share"), Some(TrayCommand::QuickShare));
         assert_eq!(tray_command("open"), Some(TrayCommand::Show));
         assert_eq!(tray_command("reconnect"), Some(TrayCommand::Reconnect));
         assert_eq!(tray_command("quit"), Some(TrayCommand::Quit));
