@@ -1,8 +1,9 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use futures_util::StreamExt;
 use reqwest::{Client, Response, redirect::Policy};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use tauri_plugin_notification::NotificationExt;
 use time::{Duration as TimeDuration, OffsetDateTime, format_description::well_known::Rfc3339};
 use url::{Host, Url};
 use zeroize::Zeroizing;
@@ -46,6 +47,15 @@ pub struct PairingStatus {
 pub struct HeartbeatStatus {
     server_time: String,
     pending_events: usize,
+    delivered_notifications: usize,
+    notification_failures: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotificationContent {
+    title: String,
+    body: String,
 }
 
 #[derive(Serialize)]
@@ -350,11 +360,42 @@ pub fn connection_profile() -> Result<Option<StoredProfile>, String> {
 }
 
 #[tauri::command]
-pub async fn send_heartbeat() -> Result<HeartbeatStatus, String> {
+pub async fn send_heartbeat(app: tauri::AppHandle) -> Result<HeartbeatStatus, String> {
     let profile = identity::load_profile()?
         .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
     validate_stored_profile(&profile)?;
     let credential = identity::load_credential(&profile.server_id)?;
+
+    let envelope = heartbeat_request(&profile, credential.as_str(), &[]).await?;
+    let (acknowledged_event_ids, delivered_notifications, notification_failures) =
+        deliver_notifications(&envelope.events, |notification| {
+            app.notification()
+                .builder()
+                .title(&notification.title)
+                .body(&notification.body)
+                .show()
+                .map_err(|_| ())
+        });
+
+    let envelope = if acknowledged_event_ids.is_empty() {
+        envelope
+    } else {
+        heartbeat_request(&profile, credential.as_str(), &acknowledged_event_ids).await?
+    };
+
+    Ok(HeartbeatStatus {
+        server_time: envelope.server_time,
+        pending_events: envelope.events.len(),
+        delivered_notifications,
+        notification_failures,
+    })
+}
+
+async fn heartbeat_request(
+    profile: &StoredProfile,
+    credential: &str,
+    acknowledged_event_ids: &[String],
+) -> Result<HeartbeatEnvelope, String> {
     let (base_url, _) = validate_address(&profile.address)?;
     let endpoint = base_url
         .join("api/link/heartbeat")
@@ -362,10 +403,10 @@ pub async fn send_heartbeat() -> Result<HeartbeatStatus, String> {
     let response = http_client()?
         .post(endpoint)
         .header("Accept", "application/json")
-        .bearer_auth(credential.as_str())
+        .bearer_auth(credential)
         .json(&serde_json::json!({
             "protocol": PROTOCOL_MAX,
-            "acknowledgedEventIds": []
+            "acknowledgedEventIds": acknowledged_event_ids
         }))
         .send()
         .await
@@ -376,11 +417,56 @@ pub async fn send_heartbeat() -> Result<HeartbeatStatus, String> {
     }
     ensure_success(&response, "heartbeat")?;
     let envelope: HeartbeatEnvelope = read_bounded_json(response).await?;
-    validate_heartbeat(&envelope, &profile)?;
-    Ok(HeartbeatStatus {
-        server_time: envelope.server_time,
-        pending_events: envelope.events.len(),
-    })
+    validate_heartbeat(&envelope, profile)?;
+    Ok(envelope)
+}
+
+fn deliver_notifications<F>(
+    events: &[HeartbeatEvent],
+    mut deliver: F,
+) -> (Vec<String>, usize, usize)
+where
+    F: FnMut(&NotificationContent) -> Result<(), ()>,
+{
+    let mut acknowledged_event_ids = Vec::new();
+    let mut delivered = 0;
+    let mut failures = 0;
+
+    for event in events {
+        if event.kind != "notification.deliver" {
+            continue;
+        }
+
+        let Ok(notification) = notification_content(event) else {
+            failures += 1;
+            continue;
+        };
+
+        if deliver(&notification).is_ok() {
+            acknowledged_event_ids.push(event.id.clone());
+            delivered += 1;
+        } else {
+            failures += 1;
+        }
+    }
+
+    (acknowledged_event_ids, delivered, failures)
+}
+
+fn notification_content(event: &HeartbeatEvent) -> Result<NotificationContent, ()> {
+    let mut content: NotificationContent =
+        serde_json::from_value(event.payload.clone()).map_err(|_| ())?;
+    content.title = bounded_notification_text(&content.title, 120)?;
+    content.body = bounded_notification_text(&content.body, 1_000)?;
+    Ok(content)
+}
+
+fn bounded_notification_text(value: &str, maximum: usize) -> Result<String, ()> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > maximum || value.chars().any(char::is_control) {
+        return Err(());
+    }
+    Ok(value.to_owned())
 }
 
 #[tauri::command]
@@ -482,9 +568,11 @@ fn validate_heartbeat(envelope: &HeartbeatEnvelope, profile: &StoredProfile) -> 
         return Err("The HomePlace server returned an invalid heartbeat.".into());
     }
     validate_server_time(&envelope.server_time)?;
+    let mut event_ids = HashSet::with_capacity(envelope.events.len());
     for event in &envelope.events {
         if event.protocol != PROTOCOL_MAX
             || !safe_identifier(&event.id)
+            || !event_ids.insert(event.id.as_str())
             || event.device_id != profile.device_id
             || event.kind.is_empty()
             || event.kind.len() > 80
@@ -708,6 +796,75 @@ mod tests {
         assert!(validate_heartbeat(&heartbeat, &profile).is_ok());
         heartbeat.server_id = "e54f9bfa-2543-4be2-bc07-c1eb3d0947ef".into();
         assert!(validate_heartbeat(&heartbeat, &profile).is_err());
+    }
+
+    #[test]
+    fn validates_notification_payload_boundaries() {
+        let event = notification_event(serde_json::json!({
+            "title": " HomePlace ",
+            "body": " Connection restored "
+        }));
+        let content = notification_content(&event).unwrap();
+        assert_eq!(content.title, "HomePlace");
+        assert_eq!(content.body, "Connection restored");
+
+        assert!(
+            notification_content(&notification_event(serde_json::json!({
+                "title": "HomePlace\nspoofed",
+                "body": "Message"
+            })))
+            .is_err()
+        );
+        assert!(
+            notification_content(&notification_event(serde_json::json!({
+                "title": "HomePlace",
+                "body": "x".repeat(1_001)
+            })))
+            .is_err()
+        );
+        assert!(
+            notification_content(&notification_event(serde_json::json!({
+                "title": "HomePlace",
+                "body": "Message",
+                "url": "https://example.net"
+            })))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn acknowledges_only_notifications_delivered_locally() {
+        let events = vec![
+            notification_event(serde_json::json!({
+                "title": "HomePlace",
+                "body": "Delivered"
+            })),
+            HeartbeatEvent {
+                id: "unknown_event".into(),
+                kind: "future.capability".into(),
+                ..notification_event(serde_json::json!({}))
+            },
+        ];
+        let (acknowledged, delivered, failures) = deliver_notifications(&events, |_| Ok(()));
+        assert_eq!(acknowledged, vec!["notification_event"]);
+        assert_eq!(delivered, 1);
+        assert_eq!(failures, 0);
+
+        let (acknowledged, delivered, failures) = deliver_notifications(&events[..1], |_| Err(()));
+        assert!(acknowledged.is_empty());
+        assert_eq!(delivered, 0);
+        assert_eq!(failures, 1);
+    }
+
+    fn notification_event(payload: serde_json::Value) -> HeartbeatEvent {
+        HeartbeatEvent {
+            protocol: PROTOCOL_MAX,
+            id: "notification_event".into(),
+            kind: "notification.deliver".into(),
+            device_id: "device_123".into(),
+            sent_at: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
+            payload,
+        }
     }
 
     #[test]

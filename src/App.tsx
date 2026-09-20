@@ -40,6 +40,8 @@ type ConnectionProfile = {
 type HeartbeatStatus = {
   serverTime: string;
   pendingEvents: number;
+  deliveredNotifications: number;
+  notificationFailures: number;
 };
 
 const steps = ["Server", "Verify", "Approve", "Connected"];
@@ -71,6 +73,8 @@ export function App() {
   const [lastHeartbeat, setLastHeartbeat] = useState<Date | null>(null);
   const [heartbeatError, setHeartbeatError] = useState<string | null>(null);
   const [pendingEvents, setPendingEvents] = useState(0);
+  const [deliveredNotifications, setDeliveredNotifications] = useState(0);
+  const [notificationFailures, setNotificationFailures] = useState(0);
 
   useEffect(() => {
     invoke<PlatformInfo>("platform_info")
@@ -140,24 +144,52 @@ export function App() {
   useEffect(() => {
     if (state !== "connected") return;
     let cancelled = false;
+    let running = false;
+    let retryCount = 0;
+    let timer: number | undefined;
+
+    function schedule(delay: number) {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void heartbeat(), delay);
+    }
 
     async function heartbeat() {
+      if (cancelled || running) return;
+      running = true;
       try {
         const result = await invoke<HeartbeatStatus>("send_heartbeat");
         if (cancelled) return;
         setLastHeartbeat(new Date(result.serverTime));
         setPendingEvents(result.pendingEvents);
+        setDeliveredNotifications(result.deliveredNotifications);
+        setNotificationFailures(result.notificationFailures);
         setHeartbeatError(null);
+        retryCount = 0;
+        schedule(30_000);
       } catch (reason) {
-        if (!cancelled) setHeartbeatError(errorMessage(reason));
+        if (cancelled) return;
+        setHeartbeatError(errorMessage(reason));
+        retryCount += 1;
+        schedule(Math.min(30_000 * 2 ** (retryCount - 1), 300_000));
+      } finally {
+        running = false;
       }
     }
 
+    function wake() {
+      if (document.visibilityState === "hidden") return;
+      window.clearTimeout(timer);
+      void heartbeat();
+    }
+
     void heartbeat();
-    const interval = window.setInterval(() => void heartbeat(), 30_000);
+    window.addEventListener("online", wake);
+    document.addEventListener("visibilitychange", wake);
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      window.clearTimeout(timer);
+      window.removeEventListener("online", wake);
+      document.removeEventListener("visibilitychange", wake);
     };
   }, [state]);
 
@@ -220,6 +252,8 @@ export function App() {
       setLastHeartbeat(null);
       setHeartbeatError(null);
       setPendingEvents(0);
+      setDeliveredNotifications(0);
+      setNotificationFailures(0);
       setError(null);
     } catch (reason) {
       setHeartbeatError(errorMessage(reason));
@@ -336,6 +370,8 @@ export function App() {
             ) : (
               <span>
                 {lastHeartbeat ? `Online · checked ${lastHeartbeat.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Connecting…"}
+                {deliveredNotifications > 0 ? ` · ${deliveredNotifications} notification${deliveredNotifications === 1 ? "" : "s"} delivered` : ""}
+                {notificationFailures > 0 ? ` · ${notificationFailures} notification${notificationFailures === 1 ? "" : "s"} need attention` : ""}
                 {pendingEvents > 0 ? ` · ${pendingEvents} pending event${pendingEvents === 1 ? "" : "s"}` : ""}
               </span>
             )}
@@ -372,7 +408,7 @@ export function App() {
 
       <footer>
         <span>Protocol v1</span>
-        <span>Pairing · Presence · Secure storage</span>
+        <span>Pairing · Presence · Notifications · Secure storage</span>
       </footer>
     </main>
   );

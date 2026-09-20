@@ -23,9 +23,9 @@ application opens a platform-specific shell without network access.
 ## Phase 1 — server profiles and secure pairing
 
 Current progress: live server verification, P-256 device identity, approval
-polling, credential persistence, active-profile restart recovery and
-authenticated heartbeat presence are implemented. Multiple profiles,
-device event handling and reconnect backoff remain; revocation and local
+polling, credential persistence, active-profile restart recovery, authenticated
+heartbeat presence, bounded reconnect backoff and the first validated device
+event handler are implemented. Multiple profiles remain; revocation and local
 forget-server recovery are implemented.
 
 - Accept HTTPS domains, local hostnames, IPv4, IPv6 and HomePlace QR payloads.
@@ -54,7 +54,9 @@ logout and server restart.
 
 ## Phase 3 — notifications, URLs and clipboard
 
-- Receive native notifications with safe action routing.
+- Receive native notifications with safe action routing. Basic validated
+  notification delivery and post-delivery acknowledgement are implemented;
+  notification actions remain.
 - Open validated HTTP and HTTPS URLs after applying the device policy.
 - Send and receive text clipboard offers with origin device and preview.
 - Require confirmation for background clipboard writes unless explicitly

@@ -11,11 +11,18 @@ pub struct Capability {
 }
 
 pub fn initial_capabilities() -> Vec<Capability> {
-    vec![Capability {
-        name: "device.presence",
-        version: 1,
-        constraints: BTreeMap::new(),
-    }]
+    vec![
+        Capability {
+            name: "notification.receive",
+            version: 1,
+            constraints: BTreeMap::new(),
+        },
+        Capability {
+            name: "device.presence",
+            version: 1,
+            constraints: BTreeMap::new(),
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -25,8 +32,17 @@ mod tests {
     #[test]
     fn scaffold_advertises_only_implemented_capabilities() {
         let capabilities = initial_capabilities();
-        assert_eq!(capabilities.len(), 1);
-        assert_eq!(capabilities[0].name, "device.presence");
+        assert_eq!(capabilities.len(), 2);
+        assert!(
+            capabilities
+                .iter()
+                .any(|item| item.name == "notification.receive")
+        );
+        assert!(
+            capabilities
+                .iter()
+                .any(|item| item.name == "device.presence")
+        );
         assert!(!capabilities.iter().any(|item| item.name == "system.shell"));
     }
 }
