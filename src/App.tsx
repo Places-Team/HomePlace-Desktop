@@ -71,6 +71,13 @@ type ClipboardSyncStatus = {
   enabled: boolean;
 };
 
+type Reminder = {
+  id: string;
+  title: string;
+  at: string;
+  repeat: string;
+};
+
 type AppSection =
   | "overview"
   | "devices"
@@ -118,6 +125,13 @@ function serverFromProfile(profile: ConnectionProfile): VerifiedServer {
   };
 }
 
+function defaultReminderTime(): string {
+  const value = new Date();
+  value.setHours(value.getHours() + 1, 0, 0, 0);
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
+}
+
 export function App() {
   const [activeSection, setActiveSection] = useState<AppSection>("overview");
   const [language, setLanguage] = useState<Language>(() => {
@@ -156,6 +170,14 @@ export function App() {
   const [clipboardSyncLoaded, setClipboardSyncLoaded] = useState(false);
   const [clipboardSyncBusy, setClipboardSyncBusy] = useState(false);
   const [clipboardSyncError, setClipboardSyncError] = useState<string | null>(null);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [remindersLoaded, setRemindersLoaded] = useState(true);
+  const [reminderBusy, setReminderBusy] = useState(false);
+  const [reminderError, setReminderError] = useState<string | null>(null);
+  const [addingReminder, setAddingReminder] = useState(false);
+  const [reminderTitle, setReminderTitle] = useState("");
+  const [reminderAt, setReminderAt] = useState(defaultReminderTime);
+  const [reminderRepeat, setReminderRepeat] = useState("none");
 
   useEffect(() => {
     invoke<PlatformInfo>("platform_info")
@@ -343,6 +365,24 @@ export function App() {
   useEffect(() => {
     if (!activeServerId) return;
     let cancelled = false;
+    invoke<Reminder[]>("list_reminders")
+      .then((items) => {
+        if (!cancelled) setReminders(items);
+      })
+      .catch((reason) => {
+        if (!cancelled) setReminderError(errorMessage(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setRemindersLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeServerId]);
+
+  useEffect(() => {
+    if (!activeServerId) return;
+    let cancelled = false;
     invoke<ClipboardSyncStatus>("clipboard_sync_status")
       .then((status) => {
         if (!cancelled) setClipboardSyncEnabled(status.enabled);
@@ -400,6 +440,12 @@ export function App() {
       isToday: value.toDateString() === today.toDateString(),
     };
   });
+  const todayReminders = reminders.filter(
+    (reminder) => new Date(reminder.at).toDateString() === today.toDateString(),
+  );
+  const upcomingReminders = reminders.filter(
+    (reminder) => new Date(reminder.at).toDateString() !== today.toDateString(),
+  );
 
   function clearConnectionHealth() {
     setLastHeartbeat(null);
@@ -613,6 +659,89 @@ export function App() {
     } finally {
       setClipboardSyncBusy(false);
     }
+  }
+
+  async function submitReminder(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!reminderTitle.trim() || !reminderAt || reminderBusy) return;
+    setReminderBusy(true);
+    setReminderError(null);
+    try {
+      const items = await invoke<Reminder[]>("create_reminder", {
+        title: reminderTitle,
+        at: new Date(reminderAt).toISOString(),
+        repeat: reminderRepeat,
+      });
+      setReminders(items);
+      setReminderTitle("");
+      setReminderAt(defaultReminderTime());
+      setReminderRepeat("none");
+      setAddingReminder(false);
+    } catch (reason) {
+      setReminderError(errorMessage(reason));
+    } finally {
+      setReminderBusy(false);
+    }
+  }
+
+  async function resolveReminder(action: "complete_reminder" | "delete_reminder", id: string) {
+    if (reminderBusy) return;
+    setReminderBusy(true);
+    setReminderError(null);
+    try {
+      const items = await invoke<Reminder[]>(action, { id });
+      setReminders(items);
+    } catch (reason) {
+      setReminderError(errorMessage(reason));
+    } finally {
+      setReminderBusy(false);
+    }
+  }
+
+  function reminderRows(items: Reminder[]) {
+    if (!remindersLoaded) {
+      return <p className="reminder-empty">{ui.productivity.loading}</p>;
+    }
+    if (items.length === 0) {
+      return <p className="reminder-empty">{ui.productivity.empty}</p>;
+    }
+    return items.map((reminder) => {
+      const at = new Date(reminder.at);
+      return (
+        <div className="reminder-item" key={reminder.id}>
+          <button
+            type="button"
+            className="reminder-complete"
+            aria-label={`${ui.productivity.complete}: ${reminder.title}`}
+            title={ui.productivity.complete}
+            disabled={reminderBusy}
+            onClick={() => void resolveReminder("complete_reminder", reminder.id)}
+          />
+          <span>
+            <b>{reminder.title}</b>
+            <small>
+              {at.toLocaleString(language === "ru" ? "ru-RU" : "en-US", {
+                day: "numeric",
+                month: "short",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+              {reminder.repeat !== "none" ? ` · ${reminder.repeat}` : ""}
+            </small>
+          </span>
+          <button
+            type="button"
+            className="reminder-delete"
+            aria-label={`${ui.productivity.delete}: ${reminder.title}`}
+            title={ui.productivity.delete}
+            disabled={reminderBusy}
+            onClick={() => void resolveReminder("delete_reminder", reminder.id)}
+          >
+            ×
+          </button>
+        </div>
+      );
+    });
   }
 
   return (
@@ -1180,21 +1309,60 @@ export function App() {
           <article className="glass-card reminders-card">
             <div className="section-heading">
               <div><p className="eyebrow">{ui.productivity.reminders}</p><h3>{ui.productivity.tasks}</h3></div>
-              <button type="button" className="subtle-action" disabled><Icon name="plus" size={13} /> {ui.productivity.newReminder}</button>
+              <button
+                type="button"
+                className="subtle-action"
+                disabled={!activeServerId || reminderBusy}
+                onClick={() => setAddingReminder((value) => !value)}
+              >
+                <Icon name="plus" size={13} /> {addingReminder ? ui.productivity.cancel : ui.productivity.newReminder}
+              </button>
             </div>
+            {addingReminder && (
+              <form className="reminder-form" onSubmit={submitReminder}>
+                <input
+                  value={reminderTitle}
+                  onChange={(event) => setReminderTitle(event.target.value)}
+                  placeholder={ui.productivity.what}
+                  maxLength={200}
+                  autoFocus
+                  required
+                />
+                <label>
+                  <span>{ui.productivity.when}</span>
+                  <input type="datetime-local" value={reminderAt} onChange={(event) => setReminderAt(event.target.value)} required />
+                </label>
+                <label>
+                  <span>{ui.productivity.repeat}</span>
+                  <select value={reminderRepeat} onChange={(event) => setReminderRepeat(event.target.value)}>
+                    <option value="none">{ui.productivity.once}</option>
+                    <option value="daily">{ui.productivity.daily}</option>
+                    <option value="weekly">{ui.productivity.weekly}</option>
+                    <option value="monthly">{ui.productivity.monthly}</option>
+                    <option value="yearly">{ui.productivity.yearly}</option>
+                  </select>
+                </label>
+                <button type="submit" disabled={reminderBusy || !reminderTitle.trim()}>{ui.productivity.add}</button>
+              </form>
+            )}
+            {reminderError && (
+              <p className="reminder-error" role="alert">
+                {reminderError.includes("permission") ? ui.productivity.permission : reminderError}
+              </p>
+            )}
             <div className="reminder-grid">
               <div className="reminder-column">
                 <b>{ui.productivity.today}</b>
-                <div className="reminder-preview"><span />{ui.productivity.reviewAlerts}<small>{ui.productivity.reviewAlertsHint}</small></div>
+                {reminderRows(todayReminders)}
               </div>
               <div className="reminder-column">
                 <b>{ui.productivity.upcoming}</b>
-                <div className="reminder-preview"><span />{ui.productivity.maintenance}<small>{ui.productivity.maintenanceHint}</small></div>
+                {reminderRows(upcomingReminders)}
               </div>
               <div className="reminder-column">
                 <b>{ui.productivity.smartLists}</b>
-                <div className="smart-list-row"><Icon name="home" size={14} />{ui.productivity.atHome} <small>0</small></div>
-                <div className="smart-list-row"><Icon name="devices" size={14} />{ui.productivity.onDevice} <small>0</small></div>
+                <div className="smart-list-row"><Icon name="home" size={14} />{ui.productivity.atHome} <small>{todayReminders.length}</small></div>
+                <div className="smart-list-row"><Icon name="devices" size={14} />{ui.productivity.onDevice} <small>{reminders.length}</small></div>
               </div>
             </div>
           </article>

@@ -70,9 +70,11 @@ opens its window and requests an immediate reconnect.
 The desktop shell provides a compact icon rail that expands on hover or
 keyboard focus, with dedicated views for overview, devices, clipboard,
 transfers, automations, productivity, notifications and settings. The
-Productivity workspace previews a unified calendar, agenda, reminders, focus
-sessions and cross-device continuation. Implemented capabilities remain
-interactive while future flows are clearly marked as previews.
+Productivity workspace combines a calendar, agenda, reminders, focus sessions
+and cross-device continuation. Reminders are loaded from the active HomePlace
+account and can be created, completed or deleted after the user approves the
+scoped `reminder.manage` permission during pairing. Implemented capabilities
+remain interactive while future flows are clearly marked as previews.
 
 The interface supports persistent Russian and English language selection. Its
 expandable navigation uses a bundled SVG icon system so controls remain crisp,

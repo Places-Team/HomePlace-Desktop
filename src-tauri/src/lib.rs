@@ -86,6 +86,10 @@ pub fn run() {
             link::client::cancel_pairing,
             link::client::clipboard_sync_status,
             link::client::set_clipboard_sync,
+            link::client::list_reminders,
+            link::client::create_reminder,
+            link::client::complete_reminder,
+            link::client::delete_reminder,
             link::client::resolve_share_offer,
             link::client::request_heartbeat,
             link::client::disconnect_device

@@ -89,6 +89,20 @@ pub struct ClipboardSyncStatus {
     enabled: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReminderSummary {
+    id: String,
+    title: String,
+    at: String,
+    repeat: String,
+}
+
+#[derive(Deserialize)]
+struct RemindersEnvelope {
+    reminders: Vec<ReminderSummary>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeartbeatStatus {
@@ -313,7 +327,7 @@ pub async fn start_pairing(
         },
         public_key,
         capabilities: initial_capabilities(),
-        permissions: Vec::new(),
+        permissions: vec!["reminder.manage"],
     };
 
     let base_url = Url::parse(&verified.address)
@@ -1254,6 +1268,163 @@ fn write_verified_file(destination: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn list_reminders() -> Result<Vec<ReminderSummary>, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    fetch_reminders(&profile, credential.as_str()).await
+}
+
+#[tauri::command]
+pub async fn create_reminder(
+    title: String,
+    at: String,
+    repeat: String,
+) -> Result<Vec<ReminderSummary>, String> {
+    let title = validate_reminder_title(&title)?;
+    validate_reminder_time(&at)?;
+    validate_reminder_repeat(&repeat)?;
+    mutate_reminders(serde_json::json!({
+        "action": "create",
+        "title": title,
+        "at": at,
+        "repeat": repeat,
+    }))
+    .await
+}
+
+#[tauri::command]
+pub async fn complete_reminder(id: String) -> Result<Vec<ReminderSummary>, String> {
+    mutate_reminder_by_id("complete", id).await
+}
+
+#[tauri::command]
+pub async fn delete_reminder(id: String) -> Result<Vec<ReminderSummary>, String> {
+    mutate_reminder_by_id("delete", id).await
+}
+
+async fn mutate_reminder_by_id(
+    action: &'static str,
+    id: String,
+) -> Result<Vec<ReminderSummary>, String> {
+    if !safe_identifier(&id) {
+        return Err("The reminder identifier is invalid.".into());
+    }
+    mutate_reminders(serde_json::json!({ "action": action, "id": id })).await
+}
+
+async fn mutate_reminders(body: serde_json::Value) -> Result<Vec<ReminderSummary>, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/reminders")
+        .map_err(|_| "Could not create reminders API address.".to_string())?;
+    let response = http_client()?
+        .post(endpoint)
+        .bearer_auth(credential.as_str())
+        .header("Accept", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    ensure_reminder_access(&response)?;
+    ensure_success(&response, "reminder")?;
+    fetch_reminders(&profile, credential.as_str()).await
+}
+
+async fn fetch_reminders(
+    profile: &StoredProfile,
+    credential: &str,
+) -> Result<Vec<ReminderSummary>, String> {
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/reminders")
+        .map_err(|_| "Could not create reminders API address.".to_string())?;
+    let response = http_client()?
+        .get(endpoint)
+        .bearer_auth(credential)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    ensure_reminder_access(&response)?;
+    ensure_success(&response, "reminders")?;
+    let envelope: RemindersEnvelope = read_bounded_json(response).await?;
+    validate_reminders(envelope.reminders)
+}
+
+fn ensure_reminder_access(response: &Response) -> Result<(), String> {
+    match response.status().as_u16() {
+        401 => Err("HomePlace rejected this device credential. Pair the device again.".into()),
+        403 => Err("Reminder access was not approved for this device. Pair it again and approve the requested permission.".into()),
+        _ => Ok(()),
+    }
+}
+
+fn validate_reminders(reminders: Vec<ReminderSummary>) -> Result<Vec<ReminderSummary>, String> {
+    if reminders.len() > 100 {
+        return Err("The HomePlace server returned too many reminders.".into());
+    }
+    for reminder in &reminders {
+        if !safe_identifier(&reminder.id)
+            || validate_reminder_title(&reminder.title).is_err()
+            || validate_reminder_time(&reminder.at).is_err()
+            || validate_reminder_repeat(&reminder.repeat).is_err()
+        {
+            return Err("The HomePlace server returned an invalid reminder.".into());
+        }
+    }
+    Ok(reminders)
+}
+
+fn validate_reminder_title(value: &str) -> Result<String, String> {
+    let title = value.trim();
+    if title.is_empty()
+        || title.chars().count() > 200
+        || title.chars().any(|character| character.is_control())
+    {
+        return Err("Reminder title must be between 1 and 200 characters.".into());
+    }
+    Ok(title.to_owned())
+}
+
+fn validate_reminder_time(value: &str) -> Result<(), String> {
+    OffsetDateTime::parse(value, &Rfc3339)
+        .map(|_| ())
+        .map_err(|_| "The reminder time is invalid.".to_string())
+}
+
+fn validate_reminder_repeat(value: &str) -> Result<(), String> {
+    if matches!(
+        value,
+        "none" | "hourly" | "daily" | "weekly" | "monthly" | "yearly"
+    ) || parse_custom_repeat(value)
+    {
+        Ok(())
+    } else {
+        Err("The reminder repeat schedule is invalid.".into())
+    }
+}
+
+fn parse_custom_repeat(value: &str) -> bool {
+    let mut parts = value.split(':');
+    let Some("every") = parts.next() else {
+        return false;
+    };
+    let Some(count) = parts.next().and_then(|item| item.parse::<u16>().ok()) else {
+        return false;
+    };
+    let Some(unit) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && (2..=999).contains(&count)
+        && matches!(unit, "hour" | "day" | "week" | "month" | "year")
+}
+
+#[tauri::command]
 pub async fn disconnect_device(
     app: AppHandle,
     revoke: bool,
@@ -1816,6 +1987,37 @@ mod tests {
 
         assert!(pending_share_offer(&unsafe_url, "server").is_none());
         assert!(pending_share_offer(&unsafe_text, "server").is_none());
+    }
+
+    #[test]
+    fn validates_reminder_inputs_and_custom_repeats() {
+        assert_eq!(validate_reminder_title("  Pay rent  ").unwrap(), "Pay rent");
+        assert!(validate_reminder_title("").is_err());
+        assert!(validate_reminder_title("bad\nline").is_err());
+        assert!(validate_reminder_repeat("none").is_ok());
+        assert!(validate_reminder_repeat("daily").is_ok());
+        assert!(validate_reminder_repeat("every:2:week").is_ok());
+        assert!(validate_reminder_repeat("every:1:week").is_err());
+        assert!(validate_reminder_repeat("every:2:minute").is_err());
+    }
+
+    #[test]
+    fn validates_bounded_reminder_responses() {
+        let reminder = ReminderSummary {
+            id: "reminder_123".into(),
+            title: "Review HomePlace".into(),
+            at: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
+            repeat: "weekly".into(),
+        };
+        assert_eq!(validate_reminders(vec![reminder]).unwrap().len(), 1);
+
+        let invalid = ReminderSummary {
+            id: "../escape".into(),
+            title: "Review HomePlace".into(),
+            at: OffsetDateTime::now_utc().format(&Rfc3339).unwrap(),
+            repeat: "weekly".into(),
+        };
+        assert!(validate_reminders(vec![invalid]).is_err());
     }
 
     fn notification_event(payload: serde_json::Value) -> HeartbeatEvent {
