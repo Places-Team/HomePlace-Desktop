@@ -163,6 +163,32 @@ struct RemindersEnvelope {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CompletedReminderSummary {
+    id: String,
+    title: String,
+    at: String,
+    repeat: String,
+    completed_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OverviewReminderSummary {
+    id: String,
+    title: String,
+    at: String,
+    repeat: String,
+    done: bool,
+    completed_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ReminderHistoryEnvelope {
+    reminders: Vec<OverviewReminderSummary>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CalendarEventSummary {
     id: String,
     summary: String,
@@ -2023,6 +2049,65 @@ pub async fn update_reminder(
 #[tauri::command]
 pub async fn complete_reminder(id: String) -> Result<Vec<ReminderSummary>, String> {
     mutate_reminder_by_id("complete", id).await
+}
+
+#[tauri::command]
+pub async fn restore_reminder(id: String) -> Result<Vec<ReminderSummary>, String> {
+    mutate_reminder_by_id("reopen", id).await
+}
+
+#[tauri::command]
+pub async fn clear_completed_reminders() -> Result<Vec<ReminderSummary>, String> {
+    mutate_reminders(serde_json::json!({ "action": "deleteCompleted" })).await
+}
+
+#[tauri::command]
+pub async fn list_completed_reminders() -> Result<Vec<CompletedReminderSummary>, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/reminders?includeCompleted=1")
+        .map_err(|_| "Could not create reminders API address.".to_string())?;
+    let response = http_client()?
+        .get(endpoint)
+        .bearer_auth(credential.as_str())
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    ensure_reminder_access(&response)?;
+    ensure_success(&response, "completed reminders")?;
+    let envelope: ReminderHistoryEnvelope = read_bounded_json(response).await?;
+    let mut completed = Vec::new();
+    for reminder in envelope.reminders {
+        if !reminder.done {
+            continue;
+        }
+        let completed_at = reminder.completed_at.ok_or_else(|| {
+            "The HomePlace server returned an invalid completed reminder.".to_string()
+        })?;
+        let active = ReminderSummary {
+            id: reminder.id.clone(),
+            title: reminder.title.clone(),
+            at: reminder.at.clone(),
+            repeat: reminder.repeat.clone(),
+        };
+        validate_reminders(vec![active])?;
+        OffsetDateTime::parse(&completed_at, &Rfc3339)
+            .map_err(|_| "The HomePlace server returned an invalid completion time.".to_string())?;
+        completed.push(CompletedReminderSummary {
+            id: reminder.id,
+            title: reminder.title,
+            at: reminder.at,
+            repeat: reminder.repeat,
+            completed_at,
+        });
+    }
+    completed.sort_by(|left, right| right.completed_at.cmp(&left.completed_at));
+    completed.truncate(100);
+    Ok(completed)
 }
 
 #[tauri::command]

@@ -153,6 +153,19 @@ type Reminder = {
   repeat: string;
 };
 
+type CompletedReminder = Reminder & {
+  completedAt: string;
+};
+
+type Idea = {
+  id: string;
+  title: string;
+  category: string;
+  createdAt: string;
+};
+
+type ReminderBucket = "overdue" | "today" | "upcoming";
+
 type CalendarEvent = {
   id: string;
   summary: string;
@@ -174,6 +187,8 @@ type AppSection =
   | "transfers"
   | "automations"
   | "productivity"
+  | "media"
+  | "monitoring"
   | "notifications"
   | "settings";
 
@@ -199,8 +214,10 @@ const navigation: Array<{
   { id: "devices", icon: "devices" },
   { id: "clipboard", icon: "clipboard" },
   { id: "transfers", icon: "transfer" },
+  { id: "media", icon: "media" },
   { id: "automations", icon: "automation" },
   { id: "productivity", icon: "calendar" },
+  { id: "monitoring", icon: "monitoring" },
   { id: "notifications", icon: "bell" },
   { id: "settings", icon: "settings" },
 ];
@@ -397,6 +414,7 @@ function MainApp() {
   const [accountDevicesLoaded, setAccountDevicesLoaded] = useState(false);
   const [accountDevicesError, setAccountDevicesError] = useState<string | null>(null);
   const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [completedReminders, setCompletedReminders] = useState<CompletedReminder[]>([]);
   const [remindersLoaded, setRemindersLoaded] = useState(true);
   const [reminderBusy, setReminderBusy] = useState(false);
   const [reminderError, setReminderError] = useState<string | null>(null);
@@ -405,6 +423,28 @@ function MainApp() {
   const [reminderAt, setReminderAt] = useState(defaultReminderTime);
   const [reminderRepeat, setReminderRepeat] = useState("none");
   const [editingReminderId, setEditingReminderId] = useState<string | null>(null);
+  const [expandedReminderIds, setExpandedReminderIds] = useState<Set<string>>(() => new Set());
+  const [draggedReminderId, setDraggedReminderId] = useState<string | null>(null);
+  const [reminderDropTarget, setReminderDropTarget] = useState<ReminderBucket | null>(null);
+  const [ideas, setIdeas] = useState<Idea[]>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem("homeplace-ideas") ?? "[]") as Idea[];
+      return Array.isArray(stored) ? stored.filter((item) => item?.id && item?.title && item?.category) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [ideaCategories, setIdeaCategories] = useState<string[]>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem("homeplace-idea-categories") ?? "[]") as string[];
+      return Array.isArray(stored) && stored.length > 0 ? stored : ["Inbox", "Work", "Home", "Media", "Later"];
+    } catch {
+      return ["Inbox", "Work", "Home", "Media", "Later"];
+    }
+  });
+  const [ideaTitle, setIdeaTitle] = useState("");
+  const [ideaCategory, setIdeaCategory] = useState("Inbox");
+  const [ideaFilter, setIdeaFilter] = useState("all");
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [calendarStatus, setCalendarStatus] = useState<CalendarSummary["status"]>("not_connected");
   const [calendarLoaded, setCalendarLoaded] = useState(false);
@@ -433,6 +473,11 @@ function MainApp() {
         decline: "Отклонить",
         edit: "Изменить",
         complete: "Выполнить",
+        restore: "Вернуть в активные",
+        expand: "Открыть полностью",
+        collapse: "Свернуть",
+        moveToday: "Перенести на сегодня",
+        moveUpcoming: "Перенести в предстоящие",
         snoozeTen: "Отложить на 10 минут",
         snoozeHour: "Отложить на час",
         tomorrow: "Перенести на завтра",
@@ -452,6 +497,11 @@ function MainApp() {
         decline: "Decline",
         edit: "Edit",
         complete: "Complete",
+        restore: "Restore to active",
+        expand: "Open full text",
+        collapse: "Collapse",
+        moveToday: "Move to today",
+        moveUpcoming: "Move to upcoming",
         snoozeTen: "Snooze for 10 minutes",
         snoozeHour: "Snooze for 1 hour",
         tomorrow: "Move to tomorrow",
@@ -749,6 +799,13 @@ function MainApp() {
       .finally(() => {
         if (!cancelled) setRemindersLoaded(true);
       });
+    invoke<CompletedReminder[]>("list_completed_reminders")
+      .then((items) => {
+        if (!cancelled) setCompletedReminders(items);
+      })
+      .catch((reason) => {
+        if (!cancelled) setReminderError(errorMessage(reason));
+      });
     return () => {
       cancelled = true;
     };
@@ -886,6 +943,8 @@ function MainApp() {
     setAccountDevices([]);
     setAccountDevicesLoaded(true);
     setAccountDevicesError(null);
+    setReminders([]);
+    setCompletedReminders([]);
     setCalendarEvents([]);
     setCalendarStatus("not_connected");
     setCalendarLoaded(false);
@@ -1320,6 +1379,38 @@ function MainApp() {
     try {
       const items = await invoke<Reminder[]>(action, { id });
       setReminders(items);
+      setCompletedReminders(await invoke<CompletedReminder[]>("list_completed_reminders"));
+    } catch (reason) {
+      setReminderError(errorMessage(reason));
+    } finally {
+      setReminderBusy(false);
+    }
+  }
+
+  async function restoreCompletedReminder(id: string) {
+    if (reminderBusy) return;
+    setReminderBusy(true);
+    setReminderError(null);
+    try {
+      const items = await invoke<Reminder[]>("restore_reminder", { id });
+      setReminders(items);
+      setCompletedReminders(await invoke<CompletedReminder[]>("list_completed_reminders"));
+    } catch (reason) {
+      setReminderError(errorMessage(reason));
+    } finally {
+      setReminderBusy(false);
+    }
+  }
+
+  async function clearCompletedReminderHistory() {
+    if (reminderBusy || completedReminders.length === 0) return;
+    if (!window.confirm(language === "ru" ? "Удалить все выполненные напоминания?" : "Delete all completed reminders?")) return;
+    setReminderBusy(true);
+    setReminderError(null);
+    try {
+      const items = await invoke<Reminder[]>("clear_completed_reminders");
+      setReminders(items);
+      setCompletedReminders([]);
     } catch (reason) {
       setReminderError(errorMessage(reason));
     } finally {
@@ -1357,6 +1448,104 @@ function MainApp() {
     next.setDate(next.getDate() + 1);
     next.setHours(current.getHours(), current.getMinutes(), 0, 0);
     void rescheduleReminder(reminder, next);
+  }
+
+  function moveReminderToBucket(reminder: Reminder, bucket: ReminderBucket) {
+    const current = new Date(reminder.at);
+    const next = new Date();
+    if (bucket === "overdue") {
+      next.setDate(next.getDate() - 1);
+      next.setHours(current.getHours(), current.getMinutes(), 0, 0);
+    } else if (bucket === "today") {
+      const soon = new Date(today.getTime() + 5 * 60_000);
+      next.setHours(
+        Math.max(current.getHours(), soon.getHours()),
+        current.getHours() > soon.getHours() ? current.getMinutes() : soon.getMinutes(),
+        0,
+        0,
+      );
+    } else {
+      next.setDate(next.getDate() + 1);
+      next.setHours(current.getHours(), current.getMinutes(), 0, 0);
+    }
+    void rescheduleReminder(reminder, next);
+  }
+
+  function dropReminder(bucket: ReminderBucket) {
+    const reminder = reminders.find((item) => item.id === draggedReminderId);
+    setDraggedReminderId(null);
+    setReminderDropTarget(null);
+    if (reminder) moveReminderToBucket(reminder, bucket);
+  }
+
+  function toggleReminderExpanded(id: string) {
+    setExpandedReminderIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function persistIdeas(next: Idea[]) {
+    setIdeas(next);
+    window.localStorage.setItem("homeplace-ideas", JSON.stringify(next));
+  }
+
+  function addIdea(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = ideaTitle.trim();
+    if (!title) return;
+    persistIdeas([{ id: crypto.randomUUID(), title: title.slice(0, 500), category: ideaCategory, createdAt: new Date().toISOString() }, ...ideas]);
+    setIdeaTitle("");
+  }
+
+  function addIdeaCategory() {
+    const value = window.prompt(language === "ru" ? "Название категории" : "Category name")?.trim();
+    if (!value || ideaCategories.some((item) => item.toLowerCase() === value.toLowerCase())) return;
+    const next = [...ideaCategories, value.slice(0, 40)];
+    setIdeaCategories(next);
+    setIdeaCategory(value.slice(0, 40));
+    window.localStorage.setItem("homeplace-idea-categories", JSON.stringify(next));
+  }
+
+  function updateIdea(idea: Idea, changes: Partial<Idea>) {
+    persistIdeas(ideas.map((item) => item.id === idea.id ? { ...item, ...changes } : item));
+  }
+
+  function ideaContextActions(idea: Idea): ContextAction[] {
+    const categoryActions = ideaCategories
+      .filter((category) => category !== idea.category)
+      .slice(0, 5)
+      .map((category) => ({
+        label: `${language === "ru" ? "В категорию" : "Move to"}: ${category}`,
+        icon: "idea" as IconName,
+        run: () => updateIdea(idea, { category }),
+      }));
+    return [
+      {
+        label: contextLabels.edit,
+        icon: "edit",
+        run: () => {
+          const title = window.prompt(language === "ru" ? "Изменить идею" : "Edit idea", idea.title)?.trim();
+          if (title) updateIdea(idea, { title: title.slice(0, 500) });
+        },
+      },
+      { label: contextLabels.copy, icon: "clipboard", run: () => void navigator.clipboard.writeText(idea.title) },
+      {
+        label: language === "ru" ? "Сделать напоминанием" : "Turn into reminder",
+        icon: "calendar",
+        run: () => {
+          setReminderTitle(idea.title.slice(0, 200));
+          setReminderAt(defaultReminderTime());
+          setReminderRepeat("none");
+          setAddingReminder(true);
+        },
+      },
+      ...categoryActions,
+      { label: contextLabels.duplicate, icon: "plus", run: () => persistIdeas([{ ...idea, id: crypto.randomUUID(), createdAt: new Date().toISOString() }, ...ideas]) },
+      { label: contextLabels.remove, icon: "trash", danger: true, run: () => persistIdeas(ideas.filter((item) => item.id !== idea.id)) },
+    ];
   }
 
   async function duplicateReminder(reminder: Reminder) {
@@ -1402,11 +1591,14 @@ function MainApp() {
 
   function reminderContextActions(reminder: Reminder): ContextAction[] {
     return [
+      { label: expandedReminderIds.has(reminder.id) ? contextLabels.collapse : contextLabels.expand, icon: "open", run: () => toggleReminderExpanded(reminder.id) },
       { label: contextLabels.complete, icon: "check", disabled: reminderBusy, run: () => void resolveReminder("complete_reminder", reminder.id) },
       { label: contextLabels.edit, icon: "edit", disabled: reminderBusy, run: () => editReminder(reminder) },
       { label: contextLabels.snoozeTen, icon: "focus", disabled: reminderBusy, run: () => snoozeReminder(reminder, 10) },
       { label: contextLabels.snoozeHour, icon: "focus", disabled: reminderBusy, run: () => snoozeReminder(reminder, 60) },
+      { label: contextLabels.moveToday, icon: "calendar", disabled: reminderBusy, run: () => moveReminderToBucket(reminder, "today") },
       { label: contextLabels.tomorrow, icon: "calendar", disabled: reminderBusy, run: () => moveReminderToTomorrow(reminder) },
+      { label: contextLabels.moveUpcoming, icon: "calendar", disabled: reminderBusy, run: () => moveReminderToBucket(reminder, "upcoming") },
       { label: contextLabels.duplicate, icon: "plus", disabled: reminderBusy, run: () => void duplicateReminder(reminder) },
       {
         label: contextLabels.remove,
@@ -1431,8 +1623,18 @@ function MainApp() {
       const at = new Date(reminder.at);
       return (
         <div
-          className="reminder-item"
+          className={`reminder-item${expandedReminderIds.has(reminder.id) ? " expanded" : ""}${draggedReminderId === reminder.id ? " dragging" : ""}`}
           key={reminder.id}
+          draggable={!reminderBusy}
+          onDragStart={(event) => {
+            setDraggedReminderId(reminder.id);
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", reminder.id);
+          }}
+          onDragEnd={() => {
+            setDraggedReminderId(null);
+            setReminderDropTarget(null);
+          }}
           onContextMenu={(event) => openContextMenu(event, reminderContextActions(reminder))}
         >
           <button
@@ -1443,7 +1645,13 @@ function MainApp() {
             disabled={reminderBusy}
             onClick={() => void resolveReminder("complete_reminder", reminder.id)}
           />
-          <span>
+          <button
+            type="button"
+            className="reminder-copy"
+            aria-expanded={expandedReminderIds.has(reminder.id)}
+            title={language === "ru" ? "Открыть напоминание" : "Open reminder"}
+            onClick={() => toggleReminderExpanded(reminder.id)}
+          >
             <b>{reminder.title}</b>
             <small>
               {at.toLocaleString(language === "ru" ? "ru-RU" : "en-US", {
@@ -1454,7 +1662,7 @@ function MainApp() {
               })}
               {reminder.repeat !== "none" ? ` · ${reminderRepeatLabel(reminder.repeat)}` : ""}
             </small>
-          </span>
+          </button>
           <button
             type="button"
             className="reminder-edit"
@@ -1480,6 +1688,32 @@ function MainApp() {
         </div>
       );
     });
+  }
+
+  function completedReminderRows() {
+    if (!remindersLoaded) return <p className="reminder-empty">{ui.productivity.loading}</p>;
+    if (completedReminders.length === 0) {
+      return <p className="reminder-empty">{language === "ru" ? "Выполненных пока нет" : "Nothing completed yet"}</p>;
+    }
+    return completedReminders.map((reminder) => (
+      <div
+        className={`reminder-item completed${expandedReminderIds.has(reminder.id) ? " expanded" : ""}`}
+        key={reminder.id}
+        onContextMenu={(event) => openContextMenu(event, [
+          { label: expandedReminderIds.has(reminder.id) ? contextLabels.collapse : contextLabels.expand, icon: "open", run: () => toggleReminderExpanded(reminder.id) },
+          { label: contextLabels.restore, icon: "refresh", disabled: reminderBusy, run: () => void restoreCompletedReminder(reminder.id) },
+          { label: contextLabels.copy, icon: "clipboard", run: () => void navigator.clipboard.writeText(reminder.title) },
+          { label: contextLabels.remove, icon: "trash", danger: true, disabled: reminderBusy, run: () => void resolveReminder("delete_reminder", reminder.id) },
+        ])}
+      >
+        <span className="reminder-complete-mark"><Icon name="check" size={10} /></span>
+        <button type="button" className="reminder-copy" aria-expanded={expandedReminderIds.has(reminder.id)} onClick={() => toggleReminderExpanded(reminder.id)}>
+          <b>{reminder.title}</b>
+          <small>{language === "ru" ? "Выполнено" : "Completed"} {new Date(reminder.completedAt).toLocaleString(language === "ru" ? "ru-RU" : "en-US", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</small>
+        </button>
+        <button type="button" className="reminder-restore" disabled={reminderBusy} onClick={() => void restoreCompletedReminder(reminder.id)} title={contextLabels.restore}><Icon name="refresh" size={12} /></button>
+      </div>
+    ));
   }
 
   const incomingOffer = offers.find((offer) => offer.id !== dismissedOfferId) ?? null;
@@ -1594,6 +1828,12 @@ function MainApp() {
               {activeSection === "productivity" && (language === "ru"
                 ? `${reminders.length} напоминаний · ${calendarEvents.length} событий`
                 : `${reminders.length} reminders · ${calendarEvents.length} events`)}
+              {activeSection === "media" && (language === "ru"
+                ? "Jellyfin · Radarr · Sonarr · qBittorrent"
+                : "Jellyfin · Radarr · Sonarr · qBittorrent")}
+              {activeSection === "monitoring" && (language === "ru"
+                ? `${accountDevices.filter((item) => item.online).length} устройств в сети · ${notificationFailures} ошибок`
+                : `${accountDevices.filter((item) => item.online).length} devices online · ${notificationFailures} issues`)}
               {activeSection === "notifications" && (notificationFailures > 0
                 ? (language === "ru" ? `${notificationFailures} требуют внимания` : `${notificationFailures} need attention`)
                 : (language === "ru" ? "Ошибок доставки нет" : "No delivery issues"))}
@@ -2369,32 +2609,150 @@ function MainApp() {
                 {reminderError.includes("permission") ? ui.productivity.permission : reminderError}
               </p>
             )}
-            <div className="reminder-grid">
-              <div className="reminder-column overdue-column">
-                <b>{ui.productivity.overdue}</b>
-                {reminderRows(overdueReminders)}
-              </div>
-              <div className="reminder-column">
-                <b>{ui.productivity.today}</b>
-                {reminderRows(todayReminders)}
-              </div>
-              <div className="reminder-column">
-                <b>{ui.productivity.upcoming}</b>
-                {reminderRows(upcomingReminders)}
-              </div>
-              <div className="reminder-column">
-                <b>{ui.productivity.smartLists}</b>
-                <div className="smart-list-row"><Icon name="home" size={14} />{ui.productivity.atHome} <small>{todayReminders.length}</small></div>
-                <div className="smart-list-row"><Icon name="devices" size={14} />{ui.productivity.onDevice} <small>{reminders.length}</small></div>
-              </div>
+          <div className="reminder-grid">
+            <div
+              className={`reminder-column overdue-column${reminderDropTarget === "overdue" ? " drop-target" : ""}`}
+              onDragOver={(event) => { event.preventDefault(); setReminderDropTarget("overdue"); }}
+              onDragLeave={() => setReminderDropTarget(null)}
+              onDrop={(event) => { event.preventDefault(); dropReminder("overdue"); }}
+            >
+              <b>{ui.productivity.overdue}</b>
+              {reminderRows(overdueReminders)}
             </div>
-          </article>
+            <div
+              className={`reminder-column${reminderDropTarget === "today" ? " drop-target" : ""}`}
+              onDragOver={(event) => { event.preventDefault(); setReminderDropTarget("today"); }}
+              onDragLeave={() => setReminderDropTarget(null)}
+              onDrop={(event) => { event.preventDefault(); dropReminder("today"); }}
+            >
+              <b>{ui.productivity.today}</b>
+              {reminderRows(todayReminders)}
+            </div>
+            <div
+              className={`reminder-column${reminderDropTarget === "upcoming" ? " drop-target" : ""}`}
+              onDragOver={(event) => { event.preventDefault(); setReminderDropTarget("upcoming"); }}
+              onDragLeave={() => setReminderDropTarget(null)}
+              onDrop={(event) => { event.preventDefault(); dropReminder("upcoming"); }}
+            >
+              <b>{ui.productivity.upcoming}</b>
+              {reminderRows(upcomingReminders)}
+            </div>
+            <div className="reminder-column completed-column">
+              <div className="reminder-column-heading">
+                <b>{language === "ru" ? "Выполненные" : "Completed"}</b>
+                {completedReminders.length > 0 && <button type="button" disabled={reminderBusy} onClick={() => void clearCompletedReminderHistory()}>{language === "ru" ? "Очистить" : "Clear"}</button>}
+              </div>
+              {completedReminderRows()}
+            </div>
+          </div>
+        </article>
 
-          <section className="productivity-features">
+        <article className="glass-card ideas-card">
+          <div className="section-heading">
+            <div><p className="eyebrow">{language === "ru" ? "БЫСТРЫЙ СБОР" : "QUICK CAPTURE"}</p><h3>{language === "ru" ? "Идеи" : "Ideas"}</h3></div>
+            <span>{ideas.length}</span>
+          </div>
+          <form className="idea-form" onSubmit={addIdea}>
+            <input value={ideaTitle} onChange={(event) => setIdeaTitle(event.target.value)} maxLength={500} placeholder={language === "ru" ? "Запишите идею, ссылку или следующий шаг…" : "Capture an idea, link, or next step…"} />
+            <select value={ideaCategory} onChange={(event) => setIdeaCategory(event.target.value)}>
+              {ideaCategories.map((category) => <option value={category} key={category}>{category}</option>)}
+            </select>
+            <button type="button" className="idea-category-add" onClick={addIdeaCategory} title={language === "ru" ? "Новая категория" : "New category"}>+</button>
+            <button type="submit" disabled={!ideaTitle.trim()}>{language === "ru" ? "Добавить" : "Add"}</button>
+          </form>
+          <div className="idea-filters" aria-label={language === "ru" ? "Категории идей" : "Idea categories"}>
+            <button type="button" className={ideaFilter === "all" ? "active" : undefined} onClick={() => setIdeaFilter("all")}>{language === "ru" ? "Все" : "All"} <small>{ideas.length}</small></button>
+            {ideaCategories.map((category) => (
+              <button type="button" className={ideaFilter === category ? "active" : undefined} onClick={() => setIdeaFilter(category)} key={category}>{category} <small>{ideas.filter((idea) => idea.category === category).length}</small></button>
+            ))}
+          </div>
+          <div className="idea-list">
+            {ideas.filter((idea) => ideaFilter === "all" || idea.category === ideaFilter).length === 0 ? (
+              <div className="idea-empty"><Icon name="idea" size={20} /><span><b>{language === "ru" ? "Здесь пока пусто" : "Nothing here yet"}</b><small>{language === "ru" ? "Добавьте идею — позже её можно превратить в напоминание." : "Capture an idea and turn it into a reminder later."}</small></span></div>
+            ) : ideas.filter((idea) => ideaFilter === "all" || idea.category === ideaFilter).map((idea) => (
+              <button type="button" className="idea-row" key={idea.id} onContextMenu={(event) => openContextMenu(event, ideaContextActions(idea))} onClick={(event) => openContextMenu(event, ideaContextActions(idea))}>
+                <span><Icon name="idea" size={15} /></span>
+                <span><b>{idea.title}</b><small>{idea.category} · {new Date(idea.createdAt).toLocaleDateString(language === "ru" ? "ru-RU" : "en-US")}</small></span>
+                <em>···</em>
+              </button>
+            ))}
+          </div>
+        </article>
+
+        <section className="productivity-features">
             <article className="glass-card"><span><Icon name="link" size={17} /></span><div><b>{ui.productivity.continueTitle}</b><p>{ui.productivity.continueHint}</p></div><small>{ui.productivity.planned}</small></article>
             <article className="glass-card"><span><Icon name="automation" size={17} /></span><div><b>{ui.productivity.contextTitle}</b><p>{ui.productivity.contextHint}</p></div><small>{ui.productivity.planned}</small></article>
             <article className="glass-card"><span><Icon name="bell" size={17} /></span><div><b>{ui.productivity.smartTitle}</b><p>{ui.productivity.smartHint}</p></div><small>{ui.productivity.planned}</small></article>
           </section>
+        </section>
+      )}
+
+      {activeSection === "media" && (
+        <section className="section-stack media-page" aria-label="Media">
+          <section className="media-service-grid">
+            {[
+              { name: "Jellyfin", detail: language === "ru" ? "Сейчас играет, продолжить просмотр и управление" : "Now playing, continue watching, and playback controls", accent: "J" },
+              { name: "Radarr", detail: language === "ru" ? "Поиск фильмов и отправка запроса" : "Movie search and request handoff", accent: "R" },
+              { name: "Sonarr", detail: language === "ru" ? "Сериалы, сезоны и очередь загрузки" : "Shows, seasons, and download queue", accent: "S" },
+              { name: "qBittorrent", detail: language === "ru" ? "Magnet-ссылки, скорость и активные загрузки" : "Magnet links, speeds, and active downloads", accent: "qB" },
+            ].map((service) => (
+              <article className="glass-card media-service-card" key={service.name} onContextMenu={(event) => openContextMenu(event, [
+                { label: language === "ru" ? "Открыть настройки интеграции" : "Open integration settings", icon: "settings", run: () => setActiveSection("settings") },
+                { label: language === "ru" ? "Обновить состояние" : "Refresh status", icon: "refresh", run: () => void reconnectNow() },
+              ])}>
+                <span className="media-service-mark">{service.accent}</span>
+                <div><h3>{service.name}</h3><p>{service.detail}</p></div>
+                <em>{language === "ru" ? "Макет · API сервера" : "Preview · server API"}</em>
+              </article>
+            ))}
+          </section>
+          <div className="media-layout">
+            <article className="glass-card media-queue-card">
+              <div className="section-heading"><div><p className="eyebrow">{language === "ru" ? "ЕДИНАЯ ОЧЕРЕДЬ" : "UNIFIED QUEUE"}</p><h3>{language === "ru" ? "Продолжить и загрузить" : "Continue and download"}</h3></div><span>{language === "ru" ? "Макет" : "Preview"}</span></div>
+              <div className="media-placeholder-list">
+                <div><span><Icon name="media" size={16} /></span><b>{language === "ru" ? "Продолжить просмотр из Jellyfin" : "Continue watching from Jellyfin"}</b><small>{language === "ru" ? "Синхронизация позиции между устройствами" : "Sync playback position between devices"}</small></div>
+                <div><span><Icon name="transfer" size={16} /></span><b>{language === "ru" ? "Активные загрузки" : "Active downloads"}</b><small>{language === "ru" ? "Общий прогресс qBittorrent, Radarr и Sonarr" : "Combined qBittorrent, Radarr, and Sonarr progress"}</small></div>
+              </div>
+            </article>
+            <article className="glass-card media-search-card">
+              <div className="section-heading"><div><p className="eyebrow">{language === "ru" ? "ЗАПРОС" : "REQUEST"}</p><h3>{language === "ru" ? "Найти фильм или сериал" : "Find a movie or show"}</h3></div></div>
+              <div className="media-search-preview"><Icon name="media" size={18} /><span>{language === "ru" ? "Поиск через Radarr и Sonarr появится после подключения серверного API." : "Radarr and Sonarr search will appear after the server API is connected."}</span></div>
+            </article>
+          </div>
+        </section>
+      )}
+
+      {activeSection === "monitoring" && (
+        <section className="section-stack monitoring-page" aria-label="Monitoring">
+          <section className="metric-grid monitoring-metrics">
+            <article className="glass-card metric-card"><span><Icon name="devices" size={21} /></span><strong>{accountDevices.filter((item) => item.online).length}/{accountDevices.length}</strong><small>{language === "ru" ? "Устройства в сети" : "Devices online"}</small></article>
+            <article className="glass-card metric-card"><span><Icon name="monitoring" size={21} /></span><strong>{lastHeartbeat ? (language === "ru" ? "Связь есть" : "Healthy") : "—"}</strong><small>{language === "ru" ? "Канал HomePlace" : "HomePlace channel"}</small></article>
+            <article className="glass-card metric-card"><span><Icon name="bell" size={21} /></span><strong>{notificationFailures}</strong><small>{language === "ru" ? "Требуют внимания" : "Need attention"}</small></article>
+          </section>
+          <div className="monitoring-layout">
+            <article className="glass-card monitoring-services">
+              <div className="section-heading"><div><p className="eyebrow">{language === "ru" ? "СОСТОЯНИЕ" : "HEALTH"}</p><h3>{language === "ru" ? "Сервисы и устройства" : "Services and devices"}</h3></div><span className={`status-chip${lastHeartbeat ? " online" : ""}`}>{lastHeartbeat ? (language === "ru" ? "В сети" : "Online") : (language === "ru" ? "Не в сети" : "Offline")}</span></div>
+              <div className="monitoring-service-list">
+                <div><span className={lastHeartbeat ? "online" : ""} /><b>HomePlace Link</b><small>{server?.serverName ?? ui.noServer}</small><em>{lastHeartbeat ? "OK" : "—"}</em></div>
+                <div><span /><b>Docker / Proxmox</b><small>{language === "ru" ? "Проверки из серверного дашборда" : "Checks from the server dashboard"}</small><em>{language === "ru" ? "Макет" : "Preview"}</em></div>
+                <div><span /><b>Home Assistant</b><small>{language === "ru" ? "Доступность и последние события" : "Availability and recent events"}</small><em>{language === "ru" ? "Макет" : "Preview"}</em></div>
+                <div><span /><b>Telegram</b><small>{language === "ru" ? "Доставка и состояние ботов" : "Delivery and bot availability"}</small><em>{notificationFailures > 0 ? "!" : "—"}</em></div>
+              </div>
+            </article>
+            <article className="glass-card roadmap-card">
+              <div className="section-heading"><div><p className="eyebrow">HOMEPLACE LINK</p><h3>{language === "ru" ? "Следующие возможности" : "Next capabilities"}</h3></div><span>{language === "ru" ? "План" : "Plan"}</span></div>
+              <div className="roadmap-list">
+                {[
+                  language === "ru" ? "Удалённые действия: блокировка, сон, запуск приложений" : "Remote actions: lock, sleep, and app launch",
+                  language === "ru" ? "Возобновляемая передача больших файлов" : "Resumable large-file transfers",
+                  language === "ru" ? "Продолжение работы на другом устройстве" : "Continue work on another device",
+                  language === "ru" ? "Подтверждение входа и действий с телефона" : "Phone approval for sign-in and sensitive actions",
+                  language === "ru" ? "Политики разрешений для каждой capability" : "Per-capability permission policies",
+                  language === "ru" ? "Подписанные обновления и безопасный откат" : "Signed updates and safe rollback",
+                ].map((item, index) => <div key={item}><span>{String(index + 1).padStart(2, "0")}</span><b>{item}</b><small>{language === "ru" ? "Запланировано" : "Planned"}</small></div>)}
+              </div>
+            </article>
+          </div>
         </section>
       )}
 
