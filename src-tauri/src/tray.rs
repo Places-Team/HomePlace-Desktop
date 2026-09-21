@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use tauri::{
@@ -13,6 +16,7 @@ pub const TRAY_ID: &str = "homeplace";
 const PROFILE_CHANGED_EVENT: &str = "link-profile-changed";
 static BACKGROUND_NOTICE_SHOWN: AtomicBool = AtomicBool::new(false);
 static QUICK_SHARE_POINTER_INSIDE: AtomicBool = AtomicBool::new(false);
+static LAST_TRAY_RECT: Mutex<Option<Rect>> = Mutex::new(None);
 
 #[derive(Debug, PartialEq, Eq)]
 enum TrayCommand {
@@ -79,20 +83,25 @@ pub fn install(app: &App) -> tauri::Result<()> {
         })
         .on_tray_icon_event(|tray, event| match event {
             TrayIconEvent::Enter { rect, .. } => {
-                QUICK_SHARE_POINTER_INSIDE.store(false, Ordering::Relaxed);
-                show_quick_share(tray.app_handle(), rect, false);
+                remember_tray_rect(rect);
+            }
+            TrayIconEvent::Move { rect, .. } => {
+                remember_tray_rect(rect);
             }
             TrayIconEvent::Click {
                 rect,
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
-            } => show_quick_share(tray.app_handle(), rect, true),
+            } => {
+                remember_tray_rect(rect.clone());
+                show_quick_share(tray.app_handle(), rect, true);
+            }
             TrayIconEvent::DoubleClick {
                 button: MouseButton::Left,
                 ..
             } => show_main_window(tray.app_handle()),
-            TrayIconEvent::Leave { .. } => schedule_quick_share_hide(tray.app_handle().clone()),
+            TrayIconEvent::Leave { rect, .. } => remember_tray_rect(rect),
             _ => {}
         });
 
@@ -195,6 +204,67 @@ fn show_quick_share_near_cursor<R: Runtime>(app: &AppHandle<R>) {
         size: Size::Physical(PhysicalSize::new(1, 1)),
     };
     show_quick_share(app, rect, true);
+}
+
+fn remember_tray_rect(rect: Rect) {
+    if let Ok(mut stored) = LAST_TRAY_RECT.lock() {
+        *stored = Some(rect);
+    }
+}
+
+fn quick_share_anchor<R: Runtime>(app: &AppHandle<R>) -> Option<Rect> {
+    if let Ok(stored) = LAST_TRAY_RECT.lock()
+        && let Some(rect) = stored.clone()
+    {
+        return Some(rect);
+    }
+    let window = app.get_webview_window("quick-share")?;
+    let cursor = app.cursor_position().ok()?;
+    let monitor = window
+        .available_monitors()
+        .ok()?
+        .into_iter()
+        .find(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            cursor.x >= f64::from(position.x)
+                && cursor.x < f64::from(position.x + size.width as i32)
+                && cursor.y >= f64::from(position.y)
+                && cursor.y < f64::from(position.y + size.height as i32)
+        })
+        .or_else(|| window.primary_monitor().ok().flatten())?;
+    Some(Rect {
+        position: Position::Physical(PhysicalPosition::new(
+            monitor.position().x + monitor.size().width as i32 - 112,
+            monitor.position().y + 4,
+        )),
+        size: Size::Physical(PhysicalSize::new(28, 24)),
+    })
+}
+
+pub fn show_quick_share_for_drag<R: Runtime>(app: &AppHandle<R>) {
+    QUICK_SHARE_POINTER_INSIDE.store(false, Ordering::Relaxed);
+    let Some(window) = app.get_webview_window("quick-share") else {
+        return;
+    };
+    let _ = window.set_size(tauri::LogicalSize::new(72.0, 44.0));
+    let _ = app.emit("quick-share-drag-active", true);
+    if let Some(rect) = quick_share_anchor(app) {
+        show_quick_share(app, rect, false);
+    }
+}
+
+pub fn finish_quick_share_drag<R: Runtime>(app: &AppHandle<R>) {
+    let _ = app.emit("quick-share-drag-active", false);
+    schedule_quick_share_hide(app.clone());
+}
+
+pub fn show_quick_share_from_extension<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(rect) = quick_share_anchor(app) {
+        show_quick_share(app, rect, true);
+    } else {
+        show_quick_share_near_cursor(app);
+    }
 }
 
 #[tauri::command]

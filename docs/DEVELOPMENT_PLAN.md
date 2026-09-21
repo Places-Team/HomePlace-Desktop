@@ -82,6 +82,13 @@ disappears from the manifest when unavailable or denied.
 
 ## Phase 4 — files and quick send
 
+macOS implementation update: a native drag monitor now reveals a compact arrow
+shelf only after a supported system drag starts. Hovering that shelf expands the
+recipient picker, and up to twenty dropped files can be sent with the existing
+500 MiB per-file bound. The application bundle also embeds a native Share
+Extension for files, links and text. Stable Developer ID signing and validation
+from an installed application remain required before public distribution.
+
 Current progress: consent-gated receive and outbound quick sharing are
 implemented with a native save dialog, a 500 MiB per-file bound, strict offer
 validation, SHA-256 verification and temporary-file commit. The tray shelf
@@ -123,6 +130,12 @@ the related action unavailable immediately.
 - Support immediate device revocation and an administrator-visible audit trail.
 
 ## Future — biometric local unlock
+
+macOS implementation update: LocalAuthentication now protects local disconnect
+and credential-revocation actions with Touch ID or the normal macOS account
+fallback. Background Link credentials deliberately remain non-interactive so
+heartbeat, clipboard and incoming transfers keep working while the window is
+hidden. Windows Hello remains planned.
 
 - Protect credential use with macOS LocalAuthentication/Touch ID and Windows
   Hello where the operating system supports it.

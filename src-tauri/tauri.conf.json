@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run build:macos-native",
     "frontendDist": "../dist"
   },
   "app": {
@@ -31,8 +31,8 @@
       {
         "label": "quick-share",
         "title": "HomePlace Quick Share",
-        "width": 176,
-        "height": 48,
+        "width": 72,
+        "height": 44,
         "visible": false,
         "resizable": false,
         "maximizable": false,
@@ -62,6 +62,13 @@
       "icons/icon.ico"
     ],
     "shortDescription": "Connect this computer to HomePlace",
-    "longDescription": "Secure native companion for a self-hosted HomePlace server."
+    "longDescription": "Secure native companion for a self-hosted HomePlace server.",
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "files": {
+        "MacOS/HomePlaceNativeBridge": "macos/build/HomePlaceNativeBridge",
+        "PlugIns/HomePlaceShare.appex": "macos/build/HomePlaceShare.appex"
+      }
+    }
   }
 }

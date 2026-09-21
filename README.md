@@ -89,6 +89,12 @@ See [Development plan](docs/DEVELOPMENT_PLAN.md),
 
 ## Related projects
 
+The macOS bundle includes a native Share Extension for files, links and text.
+Starting a supported system drag reveals a compact arrow shelf beneath the menu
+bar; hovering it opens the full HomePlace recipient picker. Sensitive local
+disconnect and revocation actions use macOS LocalAuthentication, while background
+Link credentials remain non-interactive.
+
 - [HomePlace](https://github.com/Places-Team/HomePlace) — self-hosted server and
   web control centre.
 - [HomePlace Mobile](https://github.com/Places-Team/HomePlace-Mobile) — Android

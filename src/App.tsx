@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { FormEvent, type MouseEvent as ReactMouseEvent, useEffect, useLayoutEffect, useState } from "react";
+import { FormEvent, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { copy, type Language } from "./lib/i18n";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
@@ -100,8 +100,13 @@ type ShareTarget = {
 };
 
 type QuickSharePayload =
-  | { kind: "file"; path: string; label: string }
+  | { kind: "files"; paths: string[]; label: string }
   | { kind: "text" | "url"; value: string; label: string };
+
+type PendingNativeShare = {
+  files: string[];
+  text?: string | null;
+};
 
 type Reminder = {
   id: string;
@@ -868,7 +873,14 @@ function MainApp() {
     const message = revoke
       ? "Disconnect this computer and revoke its credential on the active HomePlace server? Other paired servers will remain available."
       : "Forget the active server locally? This device will remain listed there until it is revoked in HomePlace.";
-    if (!window.confirm(message)) return;
+    if (platform.platform === "macos") {
+      try {
+        await invoke("authenticate_sensitive_action", { reason: message });
+      } catch (reason) {
+        setHeartbeatError(errorMessage(reason));
+        return;
+      }
+    } else if (!window.confirm(message)) return;
 
     setProfileBusy(true);
     try {
@@ -2293,18 +2305,53 @@ function QuickShareWindow() {
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
 
-  function loadTargets() {
+  const loadTargets = useCallback(() => {
     setError(null);
     void invoke<ShareTarget[]>("list_share_targets")
       .then(setTargets)
       .catch((reason) => setError(errorMessage(reason)));
-  }
+  }, []);
+
+  const stageText = useCallback((value: string) => {
+    setText(value);
+    setSent(false);
+    setError(null);
+    const trimmed = value.trim();
+    if (!trimmed) return setPayload(null);
+    setPayload({ kind: /^https?:\/\/\S+$/i.test(trimmed) ? "url" : "text", value: trimmed, label: trimmed });
+  }, []);
+
+  const stageFiles = useCallback((paths: string[]) => {
+    const unique = [...new Set(paths)].slice(0, 20);
+    if (unique.length === 0) return;
+    const firstName = unique[0].split(/[\\/]/).pop() || unique[0];
+    setPayload({
+      kind: "files",
+      paths: unique,
+      label: unique.length === 1 ? firstName : `${firstName} +${unique.length - 1}`,
+    });
+    setText("");
+    setExpanded(true);
+    setSent(false);
+    setError(null);
+    loadTargets();
+  }, [loadTargets]);
 
   useEffect(() => {
     let cancelled = false;
     let stopOpen: (() => void) | undefined;
     let stopStage: (() => void) | undefined;
+    let stopStageFiles: (() => void) | undefined;
+    let stopNativeStage: (() => void) | undefined;
+    let stopDragState: (() => void) | undefined;
     let stopDrop: (() => void) | undefined;
+    const consumeNativeShare = () => {
+      void invoke<PendingNativeShare | null>("take_pending_share").then((pending) => {
+        if (cancelled || !pending) return;
+        if (pending.files.length > 0) stageFiles(pending.files);
+        else if (pending.text) stageText(pending.text);
+      });
+    };
     void listen<boolean>("quick-share-opened", ({ payload: shouldExpand }) => {
       if (!cancelled) {
         setExpanded(shouldExpand);
@@ -2318,6 +2365,27 @@ function QuickShareWindow() {
     }).then((unlisten) => {
       if (cancelled) unlisten(); else stopStage = unlisten;
     });
+    void listen<string[]>("quick-share-stage-files", ({ payload: stagedFiles }) => {
+      if (!cancelled) stageFiles(stagedFiles);
+    }).then((unlisten) => {
+      if (cancelled) unlisten(); else stopStageFiles = unlisten;
+    });
+    void listen("quick-share-staged", consumeNativeShare).then((unlisten) => {
+      if (cancelled) {
+        unlisten();
+      } else {
+        stopNativeStage = unlisten;
+        consumeNativeShare();
+      }
+    });
+    void listen<boolean>("quick-share-drag-active", ({ payload: active }) => {
+      if (!cancelled) {
+        setDragging(active);
+        if (active) setExpanded(false);
+      }
+    }).then((unlisten) => {
+      if (cancelled) unlisten(); else stopDragState = unlisten;
+    });
     void getCurrentWebview().onDragDropEvent((event) => {
       if (cancelled) return;
       if (event.payload.type === "enter" || event.payload.type === "over") {
@@ -2327,12 +2395,7 @@ function QuickShareWindow() {
         setDragging(false);
       } else if (event.payload.type === "drop") {
         setDragging(false);
-        const path = event.payload.paths[0];
-        if (!path) return;
-        setPayload({ kind: "file", path, label: path.split(/[\\/]/).pop() || path });
-        setText("");
-        setSent(false);
-        setError(null);
+        stageFiles(event.payload.paths);
       }
     }).then((unlisten) => {
       if (cancelled) unlisten(); else stopDrop = unlisten;
@@ -2341,9 +2404,12 @@ function QuickShareWindow() {
       cancelled = true;
       stopOpen?.();
       stopStage?.();
+      stopStageFiles?.();
+      stopNativeStage?.();
+      stopDragState?.();
       stopDrop?.();
     };
-  }, []);
+  }, [loadTargets, stageFiles, stageText]);
 
   useEffect(() => {
     void invoke("set_quick_share_expanded", { expanded }).catch((reason) => {
@@ -2351,23 +2417,16 @@ function QuickShareWindow() {
     });
   }, [expanded]);
 
-  function stageText(value: string) {
-    setText(value);
-    setSent(false);
-    setError(null);
-    const trimmed = value.trim();
-    if (!trimmed) return setPayload(null);
-    setPayload({ kind: /^https?:\/\/\S+$/i.test(trimmed) ? "url" : "text", value: trimmed, label: trimmed });
-  }
-
   async function send(target: ShareTarget) {
     if (!payload || busy) return;
     setBusy(target.id);
     setError(null);
     setSent(false);
     try {
-      if (payload.kind === "file") {
-        await invoke("send_share_file", { targetDeviceId: target.id, filePath: payload.path });
+      if (payload.kind === "files") {
+        for (const filePath of payload.paths) {
+          await invoke("send_share_file", { targetDeviceId: target.id, filePath });
+        }
       } else {
         await invoke("send_share_text", { targetDeviceId: target.id, kind: payload.kind, value: payload.value });
       }
@@ -2383,7 +2442,7 @@ function QuickShareWindow() {
   }
 
   const compatible = targets.filter((target) => !payload
-    || (payload.kind === "file" && target.supportsFile)
+    || (payload.kind === "files" && target.supportsFile)
     || (payload.kind === "url" && target.supportsUrl)
     || (payload.kind === "text" && target.supportsText));
 
@@ -2409,9 +2468,13 @@ function QuickShareWindow() {
         }}
       >
         {!expanded && (
-          <button type="button" className="quick-share-handle" onClick={() => setExpanded(true)}>
-            <Icon name="transfer" size={17} />
-            <span>{language === "ru" ? "Перетащите сюда" : "Drop here"}</span>
+          <button
+            type="button"
+            className="quick-share-handle"
+            aria-label={language === "ru" ? "Открыть быструю отправку" : "Open quick share"}
+            onClick={() => setExpanded(true)}
+          >
+            <Icon name="transfer" size={22} />
           </button>
         )}
         {expanded && <div className="tray-share-titlebar">
@@ -2427,10 +2490,10 @@ function QuickShareWindow() {
             <b>{language === "ru" ? "Перетащите файл из Finder" : "Drop a file from Finder"}</b>
             <small>{language === "ru" ? "Или вставьте текст или ссылку, затем выберите устройство." : "Or paste text or a link, then choose a device."}</small>
           </div>
-          {payload?.kind === "file" ? (
+          {payload?.kind === "files" ? (
             <div className="quick-share-payload">
               <Icon name="transfer" size={17} />
-              <span><b>{payload.label}</b><small>{language === "ru" ? "Файл до 500 МиБ" : "File up to 500 MiB"}</small></span>
+              <span><b>{payload.label}</b><small>{language === "ru" ? `${payload.paths.length} файл(ов), до 500 МиБ каждый` : `${payload.paths.length} file(s), up to 500 MiB each`}</small></span>
               <button type="button" onClick={() => setPayload(null)}>×</button>
             </div>
           ) : (

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:macos-native": "sh scripts/build-macos-native.sh",
     "preview": "vite preview",
     "test": "vitest run",
     "lint": "eslint .",

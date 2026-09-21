@@ -2,6 +2,7 @@
 /dist/
 /target/
 /src-tauri/target/
+/src-tauri/macos/build/
 /src-tauri/gen/
 /src-tauri/icons/android/
 /src-tauri/icons/ios/

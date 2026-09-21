@@ -1,4 +1,5 @@
 mod link;
+mod native;
 mod platform;
 mod startup;
 mod tray;
@@ -56,7 +57,7 @@ fn set_quick_share_expanded(window: tauri::WebviewWindow, expanded: bool) -> Res
     let logical_size = if expanded {
         tauri::LogicalSize::new(420.0, 460.0)
     } else {
-        tauri::LogicalSize::new(176.0, 48.0)
+        tauri::LogicalSize::new(72.0, 44.0)
     };
     let physical_size = logical_size.to_physical::<u32>(scale);
     let monitor = window
@@ -112,8 +113,10 @@ async fn pick_share_files(app: tauri::AppHandle) -> Result<Vec<String>, String> 
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(
-            |app, _arguments, _working_directory| {
-                tray::show_main_window(app);
+            |app, arguments, _working_directory| {
+                if !native::dispatch_share_arguments(app, &arguments) {
+                    tray::show_main_window(app);
+                }
                 if let Some(service) = app.try_state::<link::client::HeartbeatService>() {
                     service.wake();
                 }
@@ -132,8 +135,15 @@ pub fn run() {
             // Some Linux desktop environments do not provide a tray host. In
             // that case HomePlace keeps its normal close behaviour.
             let _ = tray::install(app);
+            native::start_drag_monitor(app.handle().clone());
             let heartbeat = link::client::start_heartbeat_service(app.handle().clone());
             app.manage(heartbeat);
+            let share_app = app.handle().clone();
+            let share_arguments: Vec<String> = std::env::args().collect();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(650)).await;
+                native::dispatch_share_arguments(&share_app, &share_arguments);
+            });
             if startup::starts_hidden()
                 && app.tray_by_id(tray::TRAY_ID).is_some()
                 && let Some(window) = app.get_webview_window("main")
@@ -177,6 +187,8 @@ pub fn run() {
             start_window_drag,
             set_quick_share_expanded,
             pick_share_files,
+            native::authenticate_sensitive_action,
+            native::take_pending_share,
             tray::open_quick_share,
             tray::set_quick_share_pointer_inside,
             startup::startup_status,
