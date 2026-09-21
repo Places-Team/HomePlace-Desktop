@@ -128,6 +128,19 @@ type QuickSharePayload =
   | { kind: "files"; paths: string[]; label: string }
   | { kind: "text" | "url"; value: string; label: string };
 
+type FileTransferProgress = {
+  transferId: string;
+  fileName: string;
+  transferredBytes: number;
+  totalBytes: number;
+};
+
+type ActiveTransferProgress = FileTransferProgress & {
+  fileIndex: number;
+  fileCount: number;
+  targetName: string;
+};
+
 type PendingNativeShare = {
   files: string[];
   text?: string | null;
@@ -196,6 +209,61 @@ function errorMessage(error: unknown): string {
   return typeof error === "string" && error.trim()
     ? error
     : "The HomePlace request could not be completed.";
+}
+
+function newTransferId(): string {
+  return crypto.randomUUID().replaceAll("-", "");
+}
+
+function formatTransferBytes(value: number): string {
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(value >= 100 * 1024 * 1024 ? 0 : 1)} MiB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KiB`;
+  return `${value} B`;
+}
+
+function TransferProgressRing({ progress, compact = false }: { progress: ActiveTransferProgress; compact?: boolean }) {
+  const preparing = progress.totalBytes <= 0;
+  const percent = progress.totalBytes > 0
+    ? Math.min(100, Math.round((progress.transferredBytes / progress.totalBytes) * 100))
+    : 0;
+  const radius = 20;
+  const circumference = 2 * Math.PI * radius;
+  return (
+    <span className={`transfer-progress-ring${compact ? " compact" : ""}${preparing ? " preparing" : ""}`} aria-label={preparing ? "Preparing transfer" : `${percent}%`}>
+      <svg viewBox="0 0 48 48" aria-hidden>
+        <circle className="transfer-progress-track" cx="24" cy="24" r={radius} />
+        <circle
+          className="transfer-progress-value"
+          cx="24"
+          cy="24"
+          r={radius}
+          style={{ strokeDasharray: circumference, strokeDashoffset: circumference * (1 - percent / 100) }}
+        />
+      </svg>
+      <strong>{preparing ? "…" : percent}{!preparing && <small>%</small>}</strong>
+    </span>
+  );
+}
+
+function TransferProgressPanel({ progress, language }: { progress: ActiveTransferProgress; language: Language }) {
+  const preparing = progress.totalBytes <= 0;
+  const percent = progress.totalBytes > 0
+    ? Math.min(100, Math.round((progress.transferredBytes / progress.totalBytes) * 100))
+    : 0;
+  return (
+    <div className={`file-transfer-progress${preparing ? " preparing" : ""}${percent === 100 ? " finalizing" : ""}`} role="status" aria-live="polite">
+      <TransferProgressRing progress={progress} />
+      <div className="file-transfer-progress-copy">
+        <b>{language === "ru" ? `Отправка на ${progress.targetName}` : `Sending to ${progress.targetName}`}</b>
+        <span>{progress.fileName}</span>
+        <div className="file-transfer-progress-line"><i style={{ width: `${percent}%` }} /></div>
+        <small>{preparing
+          ? (language === "ru" ? "Подготовка защищённой передачи…" : "Preparing secure transfer…")
+          : <>{formatTransferBytes(progress.transferredBytes)} / {formatTransferBytes(progress.totalBytes)}{progress.fileCount > 1 && ` · ${progress.fileIndex + 1}/${progress.fileCount}`}</>}
+        </small>
+      </div>
+    </div>
+  );
 }
 
 function progressIndex(state: ConnectionState): number {
@@ -2510,6 +2578,7 @@ function ShareComposer({ language }: { language: Language }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  const [transferProgress, setTransferProgress] = useState<ActiveTransferProgress | null>(null);
 
   function loadTargets() {
     void invoke<ShareTarget[]>("list_share_targets")
@@ -2523,6 +2592,7 @@ function ShareComposer({ language }: { language: Language }) {
     setFiles(unique);
     setText("");
     setSent(false);
+    setTransferProgress(null);
     setError(null);
   }
 
@@ -2564,11 +2634,23 @@ function ShareComposer({ language }: { language: Language }) {
     if (busy || (files.length === 0 && !trimmed)) return;
     setBusy(target.id);
     setSent(false);
+    setTransferProgress(null);
     setError(null);
     try {
       if (files.length > 0) {
-        for (const filePath of files) {
-          await invoke("send_share_file", { targetDeviceId: target.id, filePath });
+        for (const [fileIndex, filePath] of files.entries()) {
+          const transferId = newTransferId();
+          const fileName = filePath.split(/[\\/]/).pop() || filePath;
+          setTransferProgress({ transferId, fileName, transferredBytes: 0, totalBytes: 0, fileIndex, fileCount: files.length, targetName: target.name });
+          const stopProgress = await listen<FileTransferProgress>("link-file-transfer-progress", ({ payload: progress }) => {
+            if (progress.transferId !== transferId) return;
+            setTransferProgress({ ...progress, fileIndex, fileCount: files.length, targetName: target.name });
+          });
+          try {
+            await invoke("send_share_file", { targetDeviceId: target.id, filePath, transferId });
+          } finally {
+            stopProgress();
+          }
         }
       } else {
         await invoke("send_share_text", {
@@ -2580,9 +2662,11 @@ function ShareComposer({ language }: { language: Language }) {
       setFiles([]);
       setText("");
       setSent(true);
+      setTransferProgress(null);
       loadTargets();
     } catch (reason) {
       setError(errorMessage(reason));
+      setTransferProgress(null);
     } finally {
       setBusy(null);
     }
@@ -2650,12 +2734,14 @@ function ShareComposer({ language }: { language: Language }) {
         />
       )}
 
+      {transferProgress && <TransferProgressPanel progress={transferProgress} language={language} />}
+
       <div className="share-composer-targets quick-share-targets">
         {compatible.map((target) => (
           <button type="button" key={target.id} disabled={!hasPayload || busy !== null} onClick={() => void send(target)}>
             <span className={target.online ? "online" : undefined}><Icon name="devices" size={17} /></span>
             <span><b>{target.name}</b><small>{target.ownerName} · {target.platform}</small></span>
-            <em>{busy === target.id ? "…" : "→"}</em>
+            <em>{busy === target.id && transferProgress ? <TransferProgressRing progress={transferProgress} compact /> : busy === target.id ? "…" : "→"}</em>
           </button>
         ))}
         {compatible.length === 0 && <p>{language === "ru" ? "Нет устройств с подходящими разрешениями." : "No devices have the required sharing permission."}</p>}
@@ -2679,6 +2765,7 @@ function QuickShareWindow() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  const [transferProgress, setTransferProgress] = useState<ActiveTransferProgress | null>(null);
 
   const loadTargets = useCallback(() => {
     setError(null);
@@ -2690,6 +2777,7 @@ function QuickShareWindow() {
   const stageText = useCallback((value: string) => {
     setText(value);
     setSent(false);
+    setTransferProgress(null);
     setError(null);
     const trimmed = value.trim();
     if (!trimmed) return setPayload(null);
@@ -2708,6 +2796,7 @@ function QuickShareWindow() {
     setText("");
     setExpanded(true);
     setSent(false);
+    setTransferProgress(null);
     setError(null);
     loadTargets();
   }, [loadTargets]);
@@ -2803,6 +2892,7 @@ function QuickShareWindow() {
     setText("");
     setExpanded(false);
     setSent(false);
+    setTransferProgress(null);
     setError(null);
     void invoke("set_quick_share_pinned", { pinned: false }).finally(() => {
       void getCurrentWindow().hide();
@@ -2822,25 +2912,39 @@ function QuickShareWindow() {
     setBusy(target.id);
     setError(null);
     setSent(false);
+    setTransferProgress(null);
     try {
       if (payload.kind === "files") {
-        for (const filePath of payload.paths) {
-          await invoke("send_share_file", { targetDeviceId: target.id, filePath });
+        for (const [fileIndex, filePath] of payload.paths.entries()) {
+          const transferId = newTransferId();
+          const fileName = filePath.split(/[\\/]/).pop() || filePath;
+          setTransferProgress({ transferId, fileName, transferredBytes: 0, totalBytes: 0, fileIndex, fileCount: payload.paths.length, targetName: target.name });
+          const stopProgress = await listen<FileTransferProgress>("link-file-transfer-progress", ({ payload: progress }) => {
+            if (progress.transferId !== transferId) return;
+            setTransferProgress({ ...progress, fileIndex, fileCount: payload.paths.length, targetName: target.name });
+          });
+          try {
+            await invoke("send_share_file", { targetDeviceId: target.id, filePath, transferId });
+          } finally {
+            stopProgress();
+          }
         }
       } else {
         await invoke("send_share_text", { targetDeviceId: target.id, kind: payload.kind, value: payload.value });
       }
       setPayload(null);
       setText("");
+      setTransferProgress(null);
       setSent(true);
       loadTargets();
       await invoke("set_quick_share_pinned", { pinned: false });
       window.setTimeout(() => {
         setExpanded(false);
         void getCurrentWindow().hide();
-      }, 850);
+      }, 1400);
     } catch (reason) {
       setError(errorMessage(reason));
+      setTransferProgress(null);
     } finally {
       setBusy(null);
     }
@@ -2853,13 +2957,13 @@ function QuickShareWindow() {
 
   return (
     <main
-      className={`tray-share-root${expanded ? " expanded" : ""}${dragging ? " dragging" : ""}`}
+      className={`tray-share-root${expanded ? " expanded" : ""}${dragging ? " dragging" : ""}${busy ? " sending" : ""}${sent ? " sent" : ""}`}
       onMouseEnter={() => {
         setExpanded(true);
         void invoke("set_quick_share_pointer_inside", { inside: true });
       }}
       onMouseLeave={() => {
-        setExpanded(false);
+        if (!busy && !payload && !sent) setExpanded(false);
         void invoke("set_quick_share_pointer_inside", { inside: false });
       }}
     >
@@ -2885,7 +2989,7 @@ function QuickShareWindow() {
         {expanded && <div className="tray-share-titlebar">
           <span><Icon name="transfer" size={17} /></span>
           <div><b>{language === "ru" ? "Быстрая отправка" : "Quick share"}</b><small>HomePlace Link</small></div>
-          <button type="button" onClick={dismissShelf}>×</button>
+          <button type="button" disabled={busy !== null} onClick={dismissShelf}>×</button>
         </div>}
         {expanded && <div className="quick-share-panel">
           <div className="quick-share-copy">
@@ -2896,7 +3000,7 @@ function QuickShareWindow() {
             <div className="quick-share-payload">
               <Icon name="transfer" size={17} />
               <span><b>{payload.label}</b><small>{language === "ru" ? `${payload.paths.length} файл(ов), до 500 МиБ каждый` : `${payload.paths.length} file(s), up to 500 MiB each`}</small></span>
-              <button type="button" onClick={dismissShelf}>×</button>
+              <button type="button" disabled={busy !== null} onClick={dismissShelf}>×</button>
             </div>
           ) : (
             <textarea
@@ -2907,12 +3011,13 @@ function QuickShareWindow() {
               onChange={(event) => stageText(event.target.value)}
             />
           )}
+          {transferProgress && <TransferProgressPanel progress={transferProgress} language={language} />}
           <div className="quick-share-targets">
             {compatible.map((target) => (
               <button type="button" key={target.id} disabled={!payload || busy !== null} onClick={() => void send(target)}>
                 <span className={target.online ? "online" : undefined}><Icon name="devices" size={17} /></span>
                 <span><b>{target.name}</b><small>{target.ownerName} · {target.platform}</small></span>
-                <em>{busy === target.id ? "…" : "→"}</em>
+                <em>{busy === target.id && transferProgress ? <TransferProgressRing progress={transferProgress} compact /> : busy === target.id ? "…" : "→"}</em>
               </button>
             ))}
             {compatible.length === 0 && <p>{language === "ru" ? "Нет доступных устройств. Проверьте разрешение быстрой отправки в HomePlace." : "No available devices. Check quick-sharing permission in HomePlace."}</p>}

@@ -814,6 +814,196 @@ html[data-theme="light"] .quick-share-panel textarea {
   color: var(--text);
 }
 
+/* Live file transfer — restrained motion with a clear sense of direction. */
+.file-transfer-progress {
+  position: relative;
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: 2px 16px 2px 2px;
+  background:
+    radial-gradient(circle at 12% 18%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 52%),
+    var(--field);
+  padding: 12px;
+  box-shadow: inset 0 1px color-mix(in srgb, white 8%, transparent);
+  animation: transfer-panel-arrive 260ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.file-transfer-progress::after {
+  position: absolute;
+  inset: 0;
+  width: 34%;
+  background: linear-gradient(100deg, transparent, color-mix(in srgb, var(--accent) 12%, transparent), transparent);
+  content: "";
+  pointer-events: none;
+  transform: translateX(-150%);
+  animation: transfer-sheen 2.4s ease-in-out infinite;
+}
+
+.file-transfer-progress-copy {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.file-transfer-progress-copy b,
+.file-transfer-progress-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-transfer-progress-copy b { color: var(--text); font-size: 11px; }
+.file-transfer-progress-copy span { color: var(--text-soft); font-size: 9px; }
+.file-transfer-progress-copy small { color: var(--muted); font-size: 8px; font-variant-numeric: tabular-nums; }
+
+.file-transfer-progress-line {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--line-strong) 60%, transparent);
+}
+
+.file-transfer-progress-line i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 55%, transparent);
+  transition: width 180ms ease-out;
+}
+
+.transfer-progress-ring {
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  width: 50px;
+  height: 50px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--accent-strong);
+}
+
+.transfer-progress-ring svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.transfer-progress-ring circle { fill: none; stroke-width: 3.5; }
+.transfer-progress-track { stroke: color-mix(in srgb, var(--line-strong) 65%, transparent); }
+.transfer-progress-value {
+  stroke: currentColor;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 180ms ease-out;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 60%, transparent));
+}
+
+.transfer-progress-ring strong {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.04em;
+}
+
+.transfer-progress-ring strong small { font-size: 6px; }
+.transfer-progress-ring.compact { width: 28px; height: 28px; }
+.transfer-progress-ring.compact strong { font-size: 7px; }
+.transfer-progress-ring.compact strong small { font-size: 4px; }
+
+.transfer-progress-ring.preparing svg {
+  animation: transfer-ring-spin 900ms linear infinite;
+}
+
+.transfer-progress-ring.preparing .transfer-progress-value {
+  stroke-dasharray: 28 98 !important;
+  stroke-dashoffset: 0 !important;
+}
+
+.file-transfer-progress.finalizing .transfer-progress-ring {
+  animation: transfer-complete-pulse 900ms ease-in-out infinite alternate;
+}
+
+.quick-share-targets > button {
+  transition: transform 150ms ease, border-color 150ms ease, background 150ms ease, opacity 150ms ease;
+}
+
+.quick-share-targets > button:hover:not(:disabled) { transform: translateX(2px); }
+.quick-share-targets > button em { display: grid; min-width: 28px; place-items: center; }
+
+.tray-share-root.sending .quick-share-shelf {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  box-shadow: var(--shadow), inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.tray-share-root.sending .quick-share-payload > svg {
+  animation: transfer-icon-flight 900ms ease-in-out infinite alternate;
+}
+
+.tray-share-root.dragging .quick-share-handle svg {
+  animation: transfer-drop-invite 720ms cubic-bezier(.2, .8, .2, 1) infinite alternate;
+}
+
+.quick-share-payload { animation: transfer-panel-arrive 220ms cubic-bezier(.2, .8, .2, 1) both; }
+.quick-share-success { animation: transfer-success-arrive 320ms cubic-bezier(.2, .8, .2, 1) both; }
+.quick-share-success::before { margin-right: 6px; content: "✓"; }
+.tray-share-titlebar button:disabled,
+.quick-share-payload button:disabled { cursor: default; opacity: .35; }
+
+@keyframes transfer-panel-arrive {
+  from { opacity: 0; transform: translateY(5px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes transfer-sheen {
+  0%, 28% { transform: translateX(-150%); }
+  70%, 100% { transform: translateX(420%); }
+}
+
+@keyframes transfer-icon-flight {
+  from { opacity: .58; transform: translateX(-2px); }
+  to { opacity: 1; transform: translateX(3px); }
+}
+
+@keyframes transfer-drop-invite {
+  from { opacity: .62; transform: translateY(-1px) scale(.94); }
+  to { opacity: 1; transform: translateY(1px) scale(1.08); }
+}
+
+@keyframes transfer-complete-pulse {
+  from { transform: scale(.97); filter: brightness(1); }
+  to { transform: scale(1.04); filter: brightness(1.18); }
+}
+
+@keyframes transfer-ring-spin {
+  to { transform: rotate(270deg); }
+}
+
+@keyframes transfer-success-arrive {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-transfer-progress,
+  .file-transfer-progress::after,
+  .file-transfer-progress.finalizing .transfer-progress-ring,
+  .transfer-progress-ring.preparing svg,
+  .tray-share-root.sending .quick-share-payload > svg,
+  .tray-share-root.dragging .quick-share-handle svg,
+  .quick-share-payload,
+  .quick-share-success { animation: none; }
+  .file-transfer-progress-line i,
+  .transfer-progress-value,
+  .quick-share-targets > button { transition: none; }
+}
+
 html[data-theme="light"] .muted-panel,
 html[data-theme="light"] .reminder-item b,
 html[data-theme="light"] .clipboard-history-row,

@@ -55,7 +55,7 @@ fn set_quick_share_expanded(window: tauri::WebviewWindow, expanded: bool) -> Res
         .outer_size()
         .map_err(|_| "Could not read the quick-share size.".to_string())?;
     let logical_size = if expanded {
-        tauri::LogicalSize::new(420.0, 460.0)
+        tauri::LogicalSize::new(420.0, 500.0)
     } else {
         tauri::LogicalSize::new(72.0, 44.0)
     };

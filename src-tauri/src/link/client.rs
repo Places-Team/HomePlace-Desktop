@@ -263,6 +263,15 @@ struct FileOffer {
     sha256: String,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileTransferProgress {
+    transfer_id: String,
+    file_name: String,
+    transferred_bytes: u64,
+    total_bytes: u64,
+}
+
 type OfferStore = Arc<Mutex<HashMap<String, PendingShareOffer>>>;
 
 #[derive(Serialize)]
@@ -1043,8 +1052,13 @@ pub async fn send_share_text(
 }
 
 #[tauri::command]
-pub async fn send_share_file(target_device_id: String, file_path: String) -> Result<(), String> {
-    if !safe_identifier(&target_device_id) {
+pub async fn send_share_file(
+    app: AppHandle,
+    target_device_id: String,
+    file_path: String,
+    transfer_id: String,
+) -> Result<(), String> {
+    if !safe_identifier(&target_device_id) || !safe_identifier(&transfer_id) {
         return Err("The target device is invalid.".into());
     }
     let path = PathBuf::from(file_path);
@@ -1064,7 +1078,43 @@ pub async fn send_share_file(target_device_id: String, file_path: String) -> Res
     let file = tokio::fs::File::open(&path)
         .await
         .map_err(|_| "The dropped file could not be read.".to_string())?;
-    let body = reqwest::Body::wrap_stream(ReaderStream::new(file));
+    let total_bytes = metadata.len();
+    let progress_step = (total_bytes / 200).max(256 * 1024);
+    let progress_app = app.clone();
+    let progress_transfer_id = transfer_id.clone();
+    let progress_filename = filename.clone();
+    let mut transferred_bytes = 0_u64;
+    let mut last_emitted_bytes = 0_u64;
+    let _ = app.emit(
+        "link-file-transfer-progress",
+        FileTransferProgress {
+            transfer_id: transfer_id.clone(),
+            file_name: filename.clone(),
+            transferred_bytes: 0,
+            total_bytes,
+        },
+    );
+    let stream = ReaderStream::new(file).map(move |chunk| {
+        if let Ok(bytes) = &chunk {
+            transferred_bytes = transferred_bytes.saturating_add(bytes.len() as u64);
+            if transferred_bytes == total_bytes
+                || transferred_bytes.saturating_sub(last_emitted_bytes) >= progress_step
+            {
+                last_emitted_bytes = transferred_bytes;
+                let _ = progress_app.emit(
+                    "link-file-transfer-progress",
+                    FileTransferProgress {
+                        transfer_id: progress_transfer_id.clone(),
+                        file_name: progress_filename.clone(),
+                        transferred_bytes,
+                        total_bytes,
+                    },
+                );
+            }
+        }
+        chunk
+    });
+    let body = reqwest::Body::wrap_stream(stream);
     let profile = identity::load_profile()?
         .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
     validate_stored_profile(&profile)?;
@@ -1082,7 +1132,7 @@ pub async fn send_share_file(target_device_id: String, file_path: String) -> Res
             "x-homeplace-filename-base64",
             STANDARD.encode(filename.as_bytes()),
         )
-        .header(reqwest::header::CONTENT_LENGTH, metadata.len())
+        .header(reqwest::header::CONTENT_LENGTH, total_bytes)
         .bearer_auth(credential.as_str())
         .body(body)
         .send()
