@@ -1,6 +1,10 @@
 export type IconName =
   | "home"
   | "devices"
+  | "android"
+  | "apple"
+  | "windows"
+  | "linux"
   | "clipboard"
   | "transfer"
   | "automation"
@@ -21,6 +25,10 @@ export type IconName =
 const paths: Record<IconName, ReactNode> = {
   home: <><path d="m3 10 9-7 9 7" /><path d="M5 9v11h14V9" /><path d="M9 20v-6h6v6" /></>,
   devices: <><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></>,
+  android: <><path d="M7 9h10v9H7zM8 9a4 4 0 0 1 8 0M9 5 7.5 3M15 5l1.5-2M5 10v6M19 10v6M9 18v3M15 18v3" /><path d="M10 8h.01M14 8h.01" /></>,
+  apple: <><path d="M15.4 5.2c-.9.1-2-.6-2.6-1.3-.6-.8-1.1-1.9-.9-3 1 .1 2 .7 2.6 1.4.6.7 1.1 1.8.9 2.9Z" /><path d="M18.8 12.9c0-2.7 2.2-4 2.3-4.1-1.3-1.9-3.3-2.1-4-2.1-1.7-.2-3.3 1-4.2 1-.9 0-2.2-1-3.7-.9-1.9 0-3.7 1.1-4.7 2.8-2 3.5-.5 8.7 1.4 11.5.9 1.4 2.1 2.9 3.6 2.8 1.4-.1 2-1 3.7-1 1.7 0 2.2 1 3.7 1 1.5 0 2.5-1.4 3.5-2.8 1.1-1.6 1.6-3.2 1.6-3.3-.1 0-3.2-1.2-3.2-4.9Z" transform="scale(.78) translate(3 2)" /></>,
+  windows: <><path d="M3 5.5 11 4.4v7.1H3V5.5ZM13 4.1 21 3v8.5h-8V4.1ZM3 13h8v7.1L3 19v-6ZM13 13h8v8l-8-1.1V13Z" /></>,
+  linux: <><path d="M9 8c0-3 1-5 3-5s3 2 3 5c2 1 3 3 3 6 0 4-2 7-6 7s-6-3-6-7c0-3 1-5 3-6Z" /><path d="M9 14c1 1 5 1 6 0M10 8h.01M14 8h.01M11 11h2" /></>,
   clipboard: <><rect x="5" y="4" width="14" height="17" rx="2" /><path d="M9 4.5V3h6v1.5M9 9h6M9 13h6M9 17h4" /></>,
   transfer: <><path d="M4 7h14M14 3l4 4-4 4" /><path d="M20 17H6M10 13l-4 4 4 4" /></>,
   automation: <><path d="m13 2-9 12h7l-1 8 9-12h-7l1-8Z" /></>,

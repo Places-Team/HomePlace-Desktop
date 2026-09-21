@@ -35,6 +35,127 @@ html[data-theme="dark"] {
   --shadow: 0 18px 55px rgba(0, 0, 0, 0.22);
 }
 
+/* Readability and account device surfaces. */
+html[data-theme="light"] {
+  --muted: #555a50;
+  --faint: #6d7267;
+  --line: #d1d2c8;
+  --line-strong: #afb2a5;
+}
+
+html[data-theme="light"] input::placeholder,
+html[data-theme="light"] textarea::placeholder { color: #686d62; opacity: 1; }
+html[data-theme="light"] .progress li,
+html[data-theme="light"] .hint,
+html[data-theme="light"] .connection-message,
+html[data-theme="light"] .hero-copy .eyebrow { color: var(--text-soft); }
+html[data-theme="light"] button:disabled { color: #666b60; opacity: 0.72; }
+html[data-theme="light"] .setting-error { color: #8e302c; }
+
+.settings-row b { font-size: 13px; }
+.settings-row em { font-size: 10px; }
+.metric-card small,
+.quick-actions small { font-size: 12px; }
+
+.settings-row small,
+.metric-card small,
+.quick-actions small,
+.profile-list small,
+.offer-copy small,
+.clipboard-history-row small,
+.transfer-row small,
+.reminder-item small,
+.agenda-item small,
+.theme-choices small {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.sidebar-nav button,
+.context-menu button,
+.calendar-grid button,
+.reminder-form input,
+.reminder-form select { font-size: 12px; }
+
+.quick-share-copy small,
+.quick-share-targets small,
+.quick-share-targets > p,
+.quick-share-success,
+.tray-share-titlebar small { font-size: 10px; line-height: 1.45; }
+.quick-share-targets b { font-size: 11px; }
+
+html[data-theme="light"] .platform-pill,
+html[data-theme="light"] .preview-badge,
+html[data-theme="light"] .status-chip,
+html[data-theme="light"] .sidebar-status small,
+html[data-theme="light"] .agenda-empty,
+html[data-theme="light"] .reminder-empty { color: var(--text-soft); }
+
+.reminder-custom-repeat > span:last-child {
+  display: grid;
+  grid-template-columns: 82px minmax(130px, 1fr);
+  gap: 8px;
+}
+.reminder-custom-repeat input,
+.reminder-custom-repeat select { width: 100%; }
+
+.account-device-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  gap: 12px;
+}
+
+.account-device-card {
+  position: relative;
+  display: grid;
+  min-height: 128px;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  overflow: hidden;
+  border-radius: 2px 16px 2px 2px;
+  padding: 18px;
+}
+
+.account-device-card::after {
+  position: absolute;
+  right: -34px;
+  bottom: -46px;
+  width: 120px;
+  height: 120px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  content: "";
+  pointer-events: none;
+}
+
+.account-device-card.online { border-color: color-mix(in srgb, var(--positive) 45%, var(--line)); }
+.account-device-icon {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px 15px 2px 2px;
+  background: var(--panel-soft);
+  color: var(--accent-strong);
+}
+.account-device-copy { display: grid; min-width: 0; gap: 6px; }
+.account-device-copy > div { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.account-device-copy h3 { overflow: hidden; margin: 0; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.account-device-copy p { margin: 0; color: var(--text-soft); font-size: 12px; }
+.account-device-copy small { color: var(--muted); font-size: 11px; }
+.account-device-copy em { border: 1px solid var(--line); padding: 3px 6px; color: var(--muted); font-size: 9px; font-style: normal; text-transform: uppercase; }
+.account-device-state { align-self: start; width: 10px; height: 10px; border: 2px solid var(--panel); border-radius: 50%; background: var(--faint); box-shadow: 0 0 0 1px var(--line-strong); }
+.account-device-state.online { background: var(--positive); box-shadow: 0 0 0 1px var(--positive), 0 0 14px var(--positive-soft); }
+.device-share-action { position: absolute; right: 16px; bottom: 14px; z-index: 1; display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: var(--panel-strong); color: var(--text-soft); }
+.device-share-action:hover { border-color: var(--accent); color: var(--accent-strong); }
+
+@media (max-width: 620px) {
+  .account-device-grid { grid-template-columns: 1fr; }
+  .device-network-hero { grid-template-columns: 1fr; }
+}
+
 html[data-theme="light"] {
   color-scheme: light;
   --canvas: #eeeee8;
@@ -737,4 +858,11 @@ html[data-theme="light"] .offer-copy b { color: var(--text-soft); }
   .theme-choices { grid-template-columns: 1fr; }
   .theme-future { grid-column: auto; }
   .titlebar-actions { align-items: flex-end; flex-direction: column-reverse; }
+}
+
+html[data-theme="light"] {
+  --muted: #555a50;
+  --faint: #6d7267;
+  --line: #d1d2c8;
+  --line-strong: #afb2a5;
 }

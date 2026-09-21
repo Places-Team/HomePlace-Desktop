@@ -89,6 +89,10 @@ type ClipboardSyncStatus = {
   enabled: boolean;
 };
 
+type SystemNotificationStatus = {
+  enabled: boolean;
+};
+
 type ClipboardHistoryEntry = {
   id: string;
   text: string;
@@ -106,6 +110,18 @@ type ShareTarget = {
   online: boolean;
   ownerName: string;
   ownedByCurrentUser: boolean;
+};
+
+type AccountDevice = {
+  id: string;
+  name: string;
+  platform: string;
+  platformVersion: string;
+  appVersion: string;
+  online: boolean;
+  lastSeenAt?: string | null;
+  ownerName: string;
+  currentDevice: boolean;
 };
 
 type QuickSharePayload =
@@ -290,6 +306,13 @@ function MainApp() {
   const [clipboardHistory, setClipboardHistory] = useState<ClipboardHistoryEntry[]>([]);
   const [clipboardHistoryError, setClipboardHistoryError] = useState<string | null>(null);
   const [clipboardSyncError, setClipboardSyncError] = useState<string | null>(null);
+  const [systemNotificationsEnabled, setSystemNotificationsEnabled] = useState(true);
+  const [systemNotificationsLoaded, setSystemNotificationsLoaded] = useState(false);
+  const [systemNotificationsBusy, setSystemNotificationsBusy] = useState(false);
+  const [systemNotificationsError, setSystemNotificationsError] = useState<string | null>(null);
+  const [accountDevices, setAccountDevices] = useState<AccountDevice[]>([]);
+  const [accountDevicesLoaded, setAccountDevicesLoaded] = useState(false);
+  const [accountDevicesError, setAccountDevicesError] = useState<string | null>(null);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [remindersLoaded, setRemindersLoaded] = useState(true);
   const [reminderBusy, setReminderBusy] = useState(false);
@@ -651,6 +674,45 @@ function MainApp() {
   useEffect(() => {
     if (!activeServerId) return;
     let cancelled = false;
+    invoke<AccountDevice[]>("list_account_devices")
+      .then((items) => {
+        if (!cancelled) {
+          setAccountDevices(items);
+          setAccountDevicesError(null);
+        }
+      })
+      .catch((reason) => {
+        if (!cancelled) setAccountDevicesError(errorMessage(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setAccountDevicesLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeServerId, lastHeartbeat]);
+
+  useEffect(() => {
+    if (!activeServerId) return;
+    let cancelled = false;
+    invoke<SystemNotificationStatus>("system_notification_status")
+      .then((status) => {
+        if (!cancelled) setSystemNotificationsEnabled(status.enabled);
+      })
+      .catch((reason) => {
+        if (!cancelled) setSystemNotificationsError(errorMessage(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setSystemNotificationsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeServerId]);
+
+  useEffect(() => {
+    if (!activeServerId) return;
+    let cancelled = false;
     invoke<ClipboardSyncStatus>("clipboard_sync_status")
       .then((status) => {
         if (!cancelled) setClipboardSyncEnabled(status.enabled);
@@ -738,6 +800,9 @@ function MainApp() {
     setNotificationFailures(0);
     setOffers([]);
     setOfferError(null);
+    setAccountDevices([]);
+    setAccountDevicesLoaded(true);
+    setAccountDevicesError(null);
     setCalendarEvents([]);
     setCalendarStatus("not_connected");
     setCalendarLoaded(false);
@@ -956,6 +1021,20 @@ function MainApp() {
       setClipboardSyncError(errorMessage(reason));
     } finally {
       setClipboardSyncBusy(false);
+    }
+  }
+
+  async function updateSystemNotifications(enabled: boolean) {
+    if (systemNotificationsBusy) return;
+    setSystemNotificationsBusy(true);
+    setSystemNotificationsError(null);
+    try {
+      const status = await invoke<SystemNotificationStatus>("set_system_notifications", { enabled });
+      setSystemNotificationsEnabled(status.enabled);
+    } catch (reason) {
+      setSystemNotificationsError(errorMessage(reason));
+    } finally {
+      setSystemNotificationsBusy(false);
     }
   }
 
@@ -1226,7 +1305,16 @@ function MainApp() {
       yearly: ["Каждый год", "Yearly"],
     };
     const label = labels[repeat];
-    return label ? label[language === "ru" ? 0 : 1] : repeat;
+    if (label) return label[language === "ru" ? 0 : 1];
+    const custom = /^every:(\d+):(hour|day|week|month|year)$/.exec(repeat);
+    if (!custom) return repeat;
+    const count = Number(custom[1]);
+    const units = language === "ru"
+      ? { hour: "ч.", day: "дн.", week: "нед.", month: "мес.", year: "г." }
+      : { hour: "hours", day: "days", week: "weeks", month: "months", year: "years" };
+    return language === "ru"
+      ? `Каждые ${count} ${units[custom[2] as keyof typeof units]}`
+      : `Every ${count} ${units[custom[2] as keyof typeof units]}`;
   }
 
   function reminderContextActions(reminder: Reminder): ContextAction[] {
@@ -1312,6 +1400,15 @@ function MainApp() {
   }
 
   const incomingOffer = offers.find((offer) => offer.id !== dismissedOfferId) ?? null;
+
+  function accountDeviceIcon(platformName: string): IconName {
+    const value = platformName.toLowerCase();
+    if (value.includes("android")) return "android";
+    if (value.includes("mac") || value.includes("ios")) return "apple";
+    if (value.includes("win")) return "windows";
+    if (value.includes("linux")) return "linux";
+    return "devices";
+  }
 
   return (
     <main className="desktop-shell">
@@ -1400,6 +1497,55 @@ function MainApp() {
       </header>
 
       {activeSection === "devices" && (
+        <section className="section-stack account-devices-page" aria-label={ui.nav.devices}>
+          <article className="glass-card feature-hero compact device-network-hero">
+            <div className="feature-icon"><Icon name="devices" size={28} /></div>
+            <div>
+              <p className="eyebrow">HomePlace Link</p>
+              <h2>{language === "ru" ? "Устройства вашего аккаунта" : "Your account devices"}</h2>
+              <p className="lead">{language === "ru" ? "Все компьютеры и телефоны, связанные с текущим аккаунтом HomePlace. Подключение серверов теперь находится в настройках." : "Every computer and phone linked to this HomePlace account. Server connections are now managed in Settings."}</p>
+            </div>
+            <button type="button" className="subtle-action" onClick={() => setActiveSection("settings")}>
+              <Icon name="settings" size={16} /> {language === "ru" ? "Подключения" : "Connections"}
+            </button>
+          </article>
+
+          {!activeServerId ? (
+            <div className="glass-card empty-state"><span><Icon name="link" size={20} /></span><b>{language === "ru" ? "Сначала подключите HomePlace" : "Connect HomePlace first"}</b><p>{language === "ru" ? "Управление подключением находится в настройках." : "Connection management is available in Settings."}</p></div>
+          ) : !accountDevicesLoaded ? (
+            <div className="glass-card empty-state"><span><Icon name="refresh" size={20} /></span><b>{language === "ru" ? "Загружаем устройства…" : "Loading devices…"}</b></div>
+          ) : accountDevicesError ? (
+            <div className="glass-card empty-state"><span>!</span><b>{language === "ru" ? "Не удалось получить устройства" : "Could not load devices"}</b><p>{accountDevicesError}</p></div>
+          ) : accountDevices.length === 0 ? (
+            <div className="glass-card empty-state"><span><Icon name="devices" size={20} /></span><b>{language === "ru" ? "Устройств пока нет" : "No devices yet"}</b><p>{language === "ru" ? "Добавьте устройство через настройки подключения." : "Add a device from connection settings."}</p></div>
+          ) : (
+            <div className="account-device-grid">
+              {accountDevices.map((item) => (
+                <article
+                  className={`glass-card account-device-card${item.online ? " online" : ""}`}
+                  key={item.id}
+                  onContextMenu={(event) => openContextMenu(event, [
+                    { label: contextLabels.quickShare, icon: "transfer", disabled: item.currentDevice, run: () => openQuickShare() },
+                    { label: contextLabels.copy, icon: "clipboard", run: () => void navigator.clipboard.writeText(item.name) },
+                    ...(item.currentDevice ? [{ label: contextLabels.reconnect, icon: "refresh" as IconName, disabled: reconnecting, run: () => void reconnectNow() }] : []),
+                  ])}
+                >
+                  <span className="account-device-icon"><Icon name={accountDeviceIcon(item.platform)} size={31} /></span>
+                  <div className="account-device-copy">
+                    <div><h3>{item.name}</h3>{item.currentDevice && <em>{language === "ru" ? "Это устройство" : "This device"}</em>}</div>
+                    <p>{item.ownerName} · {item.platform} {item.platformVersion}</p>
+                    <small>{item.online ? (language === "ru" ? "Сейчас в сети" : "Online now") : item.lastSeenAt ? `${language === "ru" ? "Было в сети" : "Last seen"} ${new Date(item.lastSeenAt).toLocaleString(language === "ru" ? "ru-RU" : "en-US")}` : (language === "ru" ? "Ещё не выходило в сеть" : "Never connected")}</small>
+                  </div>
+                  <span className={`account-device-state${item.online ? " online" : ""}`} aria-label={item.online ? "online" : "offline"} />
+                  {!item.currentDevice && <button type="button" className="device-share-action" onClick={() => openQuickShare()} aria-label={language === "ru" ? `Отправить на ${item.name}` : `Send to ${item.name}`}><Icon name="transfer" size={18} /></button>}
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {activeSection === "settings" && (
       <section className="glass-card hero-card">
         <div className="hero-copy">
           <p className="eyebrow">
@@ -2090,15 +2236,45 @@ function MainApp() {
                 </label>
                 <label>
                   <span>{ui.productivity.repeat}</span>
-                  <select value={reminderRepeat} onChange={(event) => setReminderRepeat(event.target.value)}>
+                  <select
+                    value={reminderRepeat.startsWith("every:") ? "custom" : reminderRepeat}
+                    onChange={(event) => setReminderRepeat(event.target.value === "custom" ? "every:2:day" : event.target.value)}
+                  >
                     <option value="none">{ui.productivity.once}</option>
                     <option value="hourly">{ui.productivity.hourly}</option>
                     <option value="daily">{ui.productivity.daily}</option>
                     <option value="weekly">{ui.productivity.weekly}</option>
                     <option value="monthly">{ui.productivity.monthly}</option>
                     <option value="yearly">{ui.productivity.yearly}</option>
+                    <option value="custom">{language === "ru" ? "Свой интервал…" : "Custom interval…"}</option>
                   </select>
                 </label>
+                {reminderRepeat.startsWith("every:") && (
+                  <label className="reminder-custom-repeat">
+                    <span>{language === "ru" ? "Каждые" : "Every"}</span>
+                    <span>
+                      <input
+                        type="number"
+                        min="2"
+                        max="999"
+                        value={reminderRepeat.split(":")[1] || "2"}
+                        onChange={(event) => setReminderRepeat(`every:${Math.max(2, Math.min(999, Number(event.target.value) || 2))}:${reminderRepeat.split(":")[2] || "day"}`)}
+                        aria-label={language === "ru" ? "Количество" : "Interval count"}
+                      />
+                      <select
+                        value={reminderRepeat.split(":")[2] || "day"}
+                        onChange={(event) => setReminderRepeat(`every:${reminderRepeat.split(":")[1] || "2"}:${event.target.value}`)}
+                        aria-label={language === "ru" ? "Единица интервала" : "Interval unit"}
+                      >
+                        <option value="hour">{language === "ru" ? "часа/часов" : "hours"}</option>
+                        <option value="day">{language === "ru" ? "дня/дней" : "days"}</option>
+                        <option value="week">{language === "ru" ? "недели/недель" : "weeks"}</option>
+                        <option value="month">{language === "ru" ? "месяца/месяцев" : "months"}</option>
+                        <option value="year">{language === "ru" ? "года/лет" : "years"}</option>
+                      </select>
+                    </span>
+                  </label>
+                )}
                 <button type="submit" disabled={reminderBusy || !reminderTitle.trim()}>{editingReminderId ? ui.productivity.save : ui.productivity.add}</button>
               </form>
             )}
@@ -2145,9 +2321,10 @@ function MainApp() {
           </section>
           <article className="glass-card settings-panel">
             <div className="section-heading"><div><p className="eyebrow">{ui.notifications.delivery}</p><h3>{ui.notifications.routes}</h3></div></div>
-            <div className="settings-row"><span><b>{ui.notifications.desktop}</b><small>{ui.notifications.desktopHint}</small></span><em>{ui.notifications.enabled}</em></div>
+            <label className="settings-row"><span><b>{ui.notifications.desktop}</b><small>{ui.notifications.desktopHint}</small></span><input type="checkbox" checked={systemNotificationsEnabled} disabled={!systemNotificationsLoaded || systemNotificationsBusy || !activeServerId} onChange={(event) => void updateSystemNotifications(event.target.checked)} /></label>
             <div className="settings-row"><span><b>{ui.notifications.telegram}</b><small>{ui.notifications.telegramHint}</small></span><em>{ui.notifications.server}</em></div>
             <div className="settings-row"><span><b>{ui.notifications.mobile}</b><small>{ui.notifications.mobileHint}</small></span><em>{ui.notifications.planned}</em></div>
+            {systemNotificationsError && <p className="setting-error" role="alert">{systemNotificationsError}</p>}
           </article>
         </section>
       )}
@@ -2189,7 +2366,7 @@ function MainApp() {
             <div className="section-heading"><div><p className="eyebrow">{ui.settings.connection}</p><h3>{server?.serverName ?? ui.settings.server}</h3></div><span className={lastHeartbeat ? "status-chip online" : "status-chip"}>{lastHeartbeat ? ui.settings.online : ui.settings.offline}</span></div>
             <div className="settings-row static"><span><b>{ui.settings.address}</b><small>{server?.address ?? ui.settings.notPaired}</small></span></div>
             <div className="settings-row static"><span><b>{ui.settings.storage}</b><small>{platform.secureStorage} · {ui.settings.storageHint}</small></span></div>
-            <div className="settings-actions"><button type="button" onClick={() => void reconnectNow()} disabled={!activeServerId || reconnecting}>{ui.settings.reconnect}</button><button type="button" onClick={() => setActiveSection("devices")}>{ui.settings.manage}</button></div>
+            <div className="settings-actions"><button type="button" onClick={() => void reconnectNow()} disabled={!activeServerId || reconnecting}>{ui.settings.reconnect}</button><button type="button" onClick={beginAddServer}>{ui.devices.addServer}</button></div>
           </article>
           <article className="glass-card settings-panel muted-panel">
             <div className="section-heading"><div><p className="eyebrow">{ui.settings.about}</p><h3>HomePlace Link Desktop</h3></div><span>v0.1.0</span></div>

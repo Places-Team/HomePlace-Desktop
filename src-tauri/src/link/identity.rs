@@ -121,6 +121,20 @@ pub fn store_clipboard_sync(server_id: &str, enabled: bool) -> Result<(), String
     }
 }
 
+pub fn system_notifications_enabled(server_id: &str) -> Result<bool, String> {
+    match entry("system-notifications", server_id)?.get_password() {
+        Ok(value) => Ok(value != "disabled"),
+        Err(KeyringError::NoEntry) => Ok(true),
+        Err(_) => Err(secure_storage_error()),
+    }
+}
+
+pub fn store_system_notifications(server_id: &str, enabled: bool) -> Result<(), String> {
+    entry("system-notifications", server_id)?
+        .set_password(if enabled { "enabled" } else { "disabled" })
+        .map_err(|_| secure_storage_error())
+}
+
 pub fn store_profile(profile: &StoredProfile) -> Result<(), String> {
     let profiles = upsert_profile(load_profiles()?, profile.clone())?;
     store_profiles(&profiles)?;
@@ -186,7 +200,13 @@ pub fn delete_profile(server_id: &str) -> Result<(), String> {
     }
 
     let mut failed = false;
-    for kind in ["pending", "credential", "identity", "clipboard-sync"] {
+    for kind in [
+        "pending",
+        "credential",
+        "identity",
+        "clipboard-sync",
+        "system-notifications",
+    ] {
         if delete_entry(entry(kind, server_id)?).is_err() {
             failed = true;
         }

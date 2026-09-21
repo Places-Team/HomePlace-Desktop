@@ -46,6 +46,7 @@ pub struct HeartbeatService {
     offers: OfferStore,
     clipboard_hash: Arc<Mutex<Option<String>>>,
     clipboard_enabled: Arc<AtomicBool>,
+    notifications_enabled: Arc<AtomicBool>,
 }
 
 impl HeartbeatService {
@@ -92,6 +93,12 @@ pub struct ClipboardSyncStatus {
     enabled: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemNotificationStatus {
+    enabled: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardHistoryEntry {
@@ -118,6 +125,25 @@ pub struct ShareTarget {
 #[derive(Deserialize)]
 struct ShareTargetsEnvelope {
     targets: Vec<ShareTarget>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountDevice {
+    id: String,
+    name: String,
+    platform: String,
+    platform_version: String,
+    app_version: String,
+    online: bool,
+    last_seen_at: Option<String>,
+    owner_name: String,
+    current_device: bool,
+}
+
+#[derive(Deserialize)]
+struct AccountDevicesEnvelope {
+    devices: Vec<AccountDevice>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -586,6 +612,10 @@ pub fn activate_profile(
     service
         .clipboard_enabled
         .store(clipboard_enabled, Ordering::Relaxed);
+    let notifications_enabled = identity::system_notifications_enabled(&profile.server_id)?;
+    service
+        .notifications_enabled
+        .store(notifications_enabled, Ordering::Relaxed);
     let current = app.clipboard().read_text().unwrap_or_default();
     *service
         .clipboard_hash
@@ -624,6 +654,7 @@ async fn send_heartbeat(
     offers: &OfferStore,
     clipboard_hash: &Arc<Mutex<Option<String>>>,
     clipboard_enabled: bool,
+    notifications_enabled: bool,
 ) -> Result<HeartbeatStatus, String> {
     let profile = identity::load_profile()?
         .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
@@ -640,14 +671,19 @@ async fn send_heartbeat(
             Ok(())
         });
     let (mut acknowledged_event_ids, delivered_notifications, notification_failures) =
-        deliver_notifications(&envelope.events, |notification| {
-            app.notification()
-                .builder()
-                .title(&notification.title)
-                .body(&notification.body)
-                .show()
-                .map_err(|_| ())
-        });
+        if notifications_enabled {
+            deliver_notifications(&envelope.events, |notification| {
+                app.notification()
+                    .builder()
+                    .title(&notification.title)
+                    .body(&notification.body)
+                    .show()
+                    .map_err(|_| ())
+            })
+        } else {
+            let (ids, _, failures) = deliver_notifications(&envelope.events, |_| Ok(()));
+            (ids, 0, failures)
+        };
     acknowledged_event_ids.append(&mut clipboard_event_ids);
 
     let envelope = if acknowledged_event_ids.is_empty() {
@@ -676,9 +712,16 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
         .and_then(|profile| identity::clipboard_sync_enabled(&profile.server_id).ok())
         .unwrap_or(false);
     let clipboard_enabled = Arc::new(AtomicBool::new(initial_clipboard_enabled));
+    let initial_notifications_enabled = identity::load_profile()
+        .ok()
+        .flatten()
+        .and_then(|profile| identity::system_notifications_enabled(&profile.server_id).ok())
+        .unwrap_or(true);
+    let notifications_enabled = Arc::new(AtomicBool::new(initial_notifications_enabled));
     let worker_offers = Arc::clone(&offers);
     let worker_clipboard_hash = Arc::clone(&clipboard_hash);
     let worker_clipboard_enabled = Arc::clone(&clipboard_enabled);
+    let worker_notifications_enabled = Arc::clone(&notifications_enabled);
     let clipboard_app = app.clone();
     let polling_clipboard_hash = Arc::clone(&clipboard_hash);
     let polling_clipboard_enabled = Arc::clone(&clipboard_enabled);
@@ -700,6 +743,7 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
                     &worker_offers,
                     &worker_clipboard_hash,
                     worker_clipboard_enabled.load(Ordering::Relaxed),
+                    worker_notifications_enabled.load(Ordering::Relaxed),
                 )
                 .await;
                 let delay = match result {
@@ -807,6 +851,7 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
         offers,
         clipboard_hash,
         clipboard_enabled,
+        notifications_enabled,
     }
 }
 
@@ -821,6 +866,15 @@ pub fn clipboard_sync_status() -> Result<ClipboardSyncStatus, String> {
         .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
     Ok(ClipboardSyncStatus {
         enabled: identity::clipboard_sync_enabled(&profile.server_id)?,
+    })
+}
+
+#[tauri::command]
+pub fn system_notification_status() -> Result<SystemNotificationStatus, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    Ok(SystemNotificationStatus {
+        enabled: identity::system_notifications_enabled(&profile.server_id)?,
     })
 }
 
@@ -896,6 +950,50 @@ pub async fn list_share_targets() -> Result<Vec<ShareTarget>, String> {
         return Err("HomePlace returned an invalid device list.".into());
     }
     Ok(envelope.targets)
+}
+
+#[tauri::command]
+pub async fn list_account_devices() -> Result<Vec<AccountDevice>, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/devices")
+        .map_err(|_| "Could not create the devices API address.".to_string())?;
+    let response = http_client()?
+        .get(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    match response.status().as_u16() {
+        401 => {
+            return Err("HomePlace rejected the device credential. Pair this device again.".into());
+        }
+        403 => return Err("This device is not assigned to a HomePlace account.".into()),
+        _ => ensure_success(&response, "account device list")?,
+    }
+    let envelope: AccountDevicesEnvelope = read_bounded_json(response).await?;
+    if envelope.devices.len() > 100
+        || envelope.devices.iter().any(|device| {
+            !safe_identifier(&device.id)
+                || bounded_device_name(&device.name).is_err()
+                || bounded_device_name(&device.owner_name).is_err()
+                || device.platform.len() > 24
+                || device.platform_version.len() > 40
+                || device.app_version.len() > 40
+                || device
+                    .last_seen_at
+                    .as_deref()
+                    .is_some_and(|value| OffsetDateTime::parse(value, &Rfc3339).is_err())
+        })
+    {
+        return Err("HomePlace returned an invalid account device list.".into());
+    }
+    Ok(envelope.devices)
 }
 
 #[tauri::command]
@@ -1018,6 +1116,21 @@ pub fn set_clipboard_sync(
         Some(clipboard_digest(&current));
     service.wake();
     Ok(ClipboardSyncStatus { enabled })
+}
+
+#[tauri::command]
+pub fn set_system_notifications(
+    enabled: bool,
+    service: State<'_, HeartbeatService>,
+) -> Result<SystemNotificationStatus, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    identity::store_system_notifications(&profile.server_id, enabled)?;
+    service
+        .notifications_enabled
+        .store(enabled, Ordering::Relaxed);
+    service.wake();
+    Ok(SystemNotificationStatus { enabled })
 }
 
 fn deliver_clipboard_updates<F>(
@@ -1932,7 +2045,7 @@ fn validate_reminders(reminders: Vec<ReminderSummary>) -> Result<Vec<ReminderSum
     }
     for reminder in &reminders {
         if !safe_identifier(&reminder.id)
-            || validate_reminder_title(&reminder.title).is_err()
+            || !valid_received_reminder_title(&reminder.title)
             || validate_reminder_time(&reminder.at).is_err()
             || validate_reminder_repeat(&reminder.repeat).is_err()
         {
@@ -2018,6 +2131,11 @@ fn validate_reminder_title(value: &str) -> Result<String, String> {
         return Err("Reminder title must be between 1 and 200 characters.".into());
     }
     Ok(title.to_owned())
+}
+
+fn valid_received_reminder_title(value: &str) -> bool {
+    let title = value.trim();
+    !title.is_empty() && title.chars().count() <= 2_000 && !title.chars().any(char::is_control)
 }
 
 fn validate_reminder_time(value: &str) -> Result<(), String> {
@@ -2678,6 +2796,9 @@ mod tests {
         assert_eq!(validate_reminder_title("  Pay rent  ").unwrap(), "Pay rent");
         assert!(validate_reminder_title("").is_err());
         assert!(validate_reminder_title("bad\nline").is_err());
+        assert!(validate_reminder_title(&"a".repeat(201)).is_err());
+        assert!(valid_received_reminder_title(&"a".repeat(500)));
+        assert!(!valid_received_reminder_title(&"a".repeat(2_001)));
         assert!(validate_reminder_repeat("none").is_ok());
         assert!(validate_reminder_repeat("daily").is_ok());
         assert!(validate_reminder_repeat("every:2:week").is_ok());
