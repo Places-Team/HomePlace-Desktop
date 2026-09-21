@@ -43,6 +43,131 @@ html[data-theme="light"] {
   --line-strong: #afb2a5;
 }
 
+/* The navigation rail owns layout space while it expands. */
+.desktop-shell {
+  --sidebar-open-width: 238px;
+  transition: grid-template-columns 180ms cubic-bezier(.2, .72, .2, 1);
+}
+
+.desktop-shell.sidebar-expanded {
+  grid-template-columns: var(--sidebar-open-width) minmax(0, 1fr);
+}
+
+.desktop-shell.sidebar-expanded .app-sidebar {
+  width: var(--sidebar-open-width);
+}
+
+.desktop-shell.sidebar-expanded .window-drag-region {
+  left: max(var(--sidebar-open-width), calc((100vw - 1480px) / 2 + var(--sidebar-open-width)));
+}
+
+.desktop-shell.sidebar-expanded .app-sidebar + .app-content::before {
+  opacity: 0;
+}
+
+.app-content {
+  transition: padding 180ms ease;
+}
+
+/* Compact shelf shown directly below the HomePlace menu-bar item. */
+.tray-share-root:not(.expanded) {
+  display: grid;
+  padding: 5px;
+  place-items: center;
+}
+
+.tray-share-root:not(.expanded) .quick-share-shelf {
+  min-height: calc(100vh - 10px);
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line));
+  border-radius: 18px 18px 7px 18px;
+  background:
+    radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--accent) 15%, transparent), transparent 62%),
+    color-mix(in srgb, var(--panel-strong) 94%, transparent);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .22), inset 0 1px color-mix(in srgb, white 8%, transparent);
+}
+
+.tray-share-root:not(.expanded) .quick-share-handle {
+  height: calc(100vh - 10px);
+  padding: 0;
+}
+
+.quick-share-drop-glyph {
+  display: grid;
+  grid-template-columns: 10px 34px 10px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--accent-strong);
+}
+
+.quick-share-drop-glyph > svg {
+  width: 34px;
+  height: 34px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent-soft) 72%, transparent);
+  padding: 7px;
+  filter: drop-shadow(0 4px 9px color-mix(in srgb, var(--accent) 22%, transparent));
+}
+
+.quick-share-drop-glyph i {
+  width: 7px;
+  height: 7px;
+  border-top: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  opacity: .52;
+}
+
+.quick-share-drop-glyph i:first-child { transform: rotate(45deg); }
+.quick-share-drop-glyph i:last-child { transform: rotate(225deg); }
+
+.tray-share-root.dragging:not(.expanded) .quick-share-shelf {
+  border-color: color-mix(in srgb, var(--accent) 78%, var(--line));
+  box-shadow:
+    0 15px 34px rgba(0, 0, 0, .28),
+    0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent),
+    inset 0 1px color-mix(in srgb, white 10%, transparent);
+}
+
+.tray-share-root.dragging .quick-share-drop-glyph i:first-child {
+  animation: shelf-arrow-left 620ms ease-in-out infinite alternate;
+}
+
+.tray-share-root.dragging .quick-share-drop-glyph i:last-child {
+  animation: shelf-arrow-right 620ms ease-in-out infinite alternate;
+}
+
+.tray-share-root.expanded .quick-share-shelf {
+  border-radius: 20px 20px 6px 20px;
+}
+
+.tray-share-root.dragging.expanded .quick-share-copy {
+  border: 1px dashed color-mix(in srgb, var(--accent) 60%, var(--line));
+  border-radius: 2px 12px 2px 2px;
+  background: var(--accent-soft);
+  padding: 10px 11px;
+}
+
+@keyframes shelf-arrow-left {
+  from { opacity: .38; transform: translateX(-2px) rotate(45deg); }
+  to { opacity: 1; transform: translateX(2px) rotate(45deg); }
+}
+
+@keyframes shelf-arrow-right {
+  from { opacity: .38; transform: translateX(2px) rotate(225deg); }
+  to { opacity: 1; transform: translateX(-2px) rotate(225deg); }
+}
+
+@media (max-width: 760px) {
+  .desktop-shell { --sidebar-open-width: min(220px, 46vw); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desktop-shell,
+  .app-content { transition: none; }
+  .tray-share-root.dragging .quick-share-drop-glyph i { animation: none; }
+}
+
 html[data-theme="light"] input::placeholder,
 html[data-theme="light"] textarea::placeholder { color: #686d62; opacity: 1; }
 html[data-theme="light"] .progress li,

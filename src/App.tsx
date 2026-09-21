@@ -326,6 +326,7 @@ export function App() {
 
 function MainApp() {
   const [activeSection, setActiveSection] = useState<AppSection>("overview");
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>(storedTheme);
   const [language, setLanguage] = useState<Language>(() => {
     const saved = window.localStorage.getItem("homeplace-language");
@@ -1479,7 +1480,7 @@ function MainApp() {
   }
 
   return (
-    <main className="desktop-shell">
+    <main className={`desktop-shell${sidebarExpanded ? " sidebar-expanded" : ""}`}>
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <div
@@ -1494,6 +1495,16 @@ function MainApp() {
       <aside
         className="app-sidebar"
         aria-label="Main navigation"
+        onMouseEnter={() => setSidebarExpanded(true)}
+        onMouseLeave={(event) => {
+          if (!event.currentTarget.contains(document.activeElement)) setSidebarExpanded(false);
+        }}
+        onFocus={() => setSidebarExpanded(true)}
+        onBlur={(event) => {
+          if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
+            setSidebarExpanded(false);
+          }
+        }}
       >
         <div className="sidebar-brand" data-tauri-drag-region>
           <div className="brand-mark" aria-hidden>
@@ -2983,7 +2994,11 @@ function QuickShareWindow() {
             aria-label={language === "ru" ? "Открыть быструю отправку" : "Open quick share"}
             onClick={() => setExpanded(true)}
           >
-            <Icon name="transfer" size={22} />
+            <span className="quick-share-drop-glyph" aria-hidden>
+              <i />
+              <Icon name="transfer" size={22} />
+              <i />
+            </span>
           </button>
         )}
         {expanded && <div className="tray-share-titlebar">
@@ -2993,8 +3008,12 @@ function QuickShareWindow() {
         </div>}
         {expanded && <div className="quick-share-panel">
           <div className="quick-share-copy">
-            <b>{language === "ru" ? "Перетащите файл из Finder" : "Drop a file from Finder"}</b>
-            <small>{language === "ru" ? "Или вставьте текст или ссылку, затем выберите устройство." : "Or paste text or a link, then choose a device."}</small>
+            <b>{dragging
+              ? (language === "ru" ? "Отпустите — файл останется на полке" : "Drop it — the file will stay on the shelf")
+              : (language === "ru" ? "Перетащите файл из Finder" : "Drop a file from Finder")}</b>
+            <small>{dragging
+              ? (language === "ru" ? "После этого спокойно выберите устройство для отправки." : "Then choose a device whenever you are ready.")
+              : (language === "ru" ? "Или вставьте текст или ссылку, затем выберите устройство." : "Or paste text or a link, then choose a device.")}</small>
           </div>
           {payload?.kind === "files" ? (
             <div className="quick-share-payload">

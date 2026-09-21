@@ -57,7 +57,7 @@ fn set_quick_share_expanded(window: tauri::WebviewWindow, expanded: bool) -> Res
     let logical_size = if expanded {
         tauri::LogicalSize::new(420.0, 500.0)
     } else {
-        tauri::LogicalSize::new(72.0, 44.0)
+        tauri::LogicalSize::new(104.0, 56.0)
     };
     let physical_size = logical_size.to_physical::<u32>(scale);
     let monitor = window

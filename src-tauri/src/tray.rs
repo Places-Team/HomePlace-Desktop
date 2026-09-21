@@ -194,6 +194,10 @@ fn build_menu<R: Runtime, M: Manager<R>>(app: &M) -> tauri::Result<Menu<R>> {
 }
 
 fn show_quick_share_near_cursor<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(rect) = quick_share_anchor(app) {
+        show_quick_share(app, rect, true);
+        return;
+    }
     let Ok(cursor) = app.cursor_position() else {
         return;
     };
@@ -214,32 +218,25 @@ fn remember_tray_rect(rect: Rect) {
 }
 
 fn quick_share_anchor<R: Runtime>(app: &AppHandle<R>) -> Option<Rect> {
+    if let Some(rect) = app
+        .tray_by_id(TRAY_ID)
+        .and_then(|tray| tray.rect().ok().flatten())
+    {
+        remember_tray_rect(rect.clone());
+        return Some(rect);
+    }
     if let Ok(stored) = LAST_TRAY_RECT.lock()
         && let Some(rect) = stored.clone()
     {
         return Some(rect);
     }
-    let window = app.get_webview_window("quick-share")?;
     let cursor = app.cursor_position().ok()?;
-    let monitor = window
-        .available_monitors()
-        .ok()?
-        .into_iter()
-        .find(|monitor| {
-            let position = monitor.position();
-            let size = monitor.size();
-            cursor.x >= f64::from(position.x)
-                && cursor.x < f64::from(position.x + size.width as i32)
-                && cursor.y >= f64::from(position.y)
-                && cursor.y < f64::from(position.y + size.height as i32)
-        })
-        .or_else(|| window.primary_monitor().ok().flatten())?;
     Some(Rect {
         position: Position::Physical(PhysicalPosition::new(
-            monitor.position().x + monitor.size().width as i32 - 112,
-            monitor.position().y + 4,
+            cursor.x.round() as i32,
+            cursor.y.round() as i32,
         )),
-        size: Size::Physical(PhysicalSize::new(28, 24)),
+        size: Size::Physical(PhysicalSize::new(1, 1)),
     })
 }
 
@@ -248,7 +245,7 @@ pub fn show_quick_share_for_drag<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window("quick-share") else {
         return;
     };
-    let _ = window.set_size(tauri::LogicalSize::new(72.0, 44.0));
+    let _ = window.set_size(tauri::LogicalSize::new(104.0, 56.0));
     let _ = app.emit("quick-share-drag-active", true);
     if let Some(rect) = quick_share_anchor(app) {
         show_quick_share(app, rect, false);
@@ -316,7 +313,19 @@ fn show_quick_share<R: Runtime>(app: &AppHandle<R>, tray_rect: Rect, focus: bool
     let mut x = tray_position.x + (tray_size.width - f64::from(window_size.width)) / 2.0;
     let mut y = tray_position.y + tray_size.height + 6.0 * scale_factor;
 
-    if let Ok(Some(monitor)) = window.current_monitor() {
+    let anchor_x = tray_position.x + tray_size.width / 2.0;
+    let anchor_y = tray_position.y + tray_size.height / 2.0;
+    let anchor_monitor = window.available_monitors().ok().and_then(|monitors| {
+        monitors.into_iter().find(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            anchor_x >= f64::from(position.x)
+                && anchor_x < f64::from(position.x + size.width as i32)
+                && anchor_y >= f64::from(position.y)
+                && anchor_y < f64::from(position.y + size.height as i32)
+        })
+    });
+    if let Some(monitor) = anchor_monitor.or_else(|| window.current_monitor().ok().flatten()) {
         let monitor_position = monitor.position();
         let monitor_size = monitor.size();
         let min_x = f64::from(monitor_position.x) + 8.0 * scale_factor;
