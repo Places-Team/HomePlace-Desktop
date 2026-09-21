@@ -559,6 +559,12 @@ html[data-theme="light"] .sidebar-brand .brand-mark img { filter: none; }
   color: var(--text);
 }
 
+.titlebar-context-action.active {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
 .eyebrow {
   color: var(--muted);
   font-size: 9px;

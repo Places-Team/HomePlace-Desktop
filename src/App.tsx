@@ -1573,17 +1573,34 @@ function MainApp() {
           </span>
           <div>
             <h1>{ui.nav[activeSection]}</h1>
-            {activeSection === "devices" && (
-              <p className="titlebar-subtitle">
-                {!activeServerId
-                  ? (language === "ru" ? "HomePlace не подключён" : "HomePlace is not connected")
-                  : !accountDevicesLoaded
-                    ? (language === "ru" ? "Загружаем устройства…" : "Loading devices…")
-                    : accountDevicesError
-                      ? (language === "ru" ? "Устройства временно недоступны" : "Devices are temporarily unavailable")
-                      : `${deviceCountLabel(accountDevices.length, language)} · ${accountDevices.filter((item) => item.online).length} ${language === "ru" ? "в сети" : "online"}`}
-              </p>
-            )}
+            <p className="titlebar-subtitle">
+              {activeSection === "overview" && (lastHeartbeat
+                ? `${server?.serverName ?? "HomePlace"} · ${language === "ru" ? "подключено" : "connected"}`
+                : (language === "ru" ? "Ожидание подключения" : "Waiting for connection"))}
+              {activeSection === "devices" && (!activeServerId
+                ? (language === "ru" ? "HomePlace не подключён" : "HomePlace is not connected")
+                : !accountDevicesLoaded
+                  ? (language === "ru" ? "Загружаем устройства…" : "Loading devices…")
+                  : accountDevicesError
+                    ? (language === "ru" ? "Устройства временно недоступны" : "Devices are temporarily unavailable")
+                    : `${deviceCountLabel(accountDevices.length, language)} · ${accountDevices.filter((item) => item.online).length} ${language === "ru" ? "в сети" : "online"}`)}
+              {activeSection === "clipboard" && (clipboardSyncEnabled
+                ? (language === "ru" ? "Синхронизация включена" : "Sync is on")
+                : (language === "ru" ? "Синхронизация выключена" : "Sync is off"))}
+              {activeSection === "transfers" && (language === "ru"
+                ? `${offers.length} входящих · ${transferHistory.length} в истории`
+                : `${offers.length} incoming · ${transferHistory.length} in history`)}
+              {activeSection === "automations" && (language === "ru" ? "3 запланированных сценария" : "3 planned scenarios")}
+              {activeSection === "productivity" && (language === "ru"
+                ? `${reminders.length} напоминаний · ${calendarEvents.length} событий`
+                : `${reminders.length} reminders · ${calendarEvents.length} events`)}
+              {activeSection === "notifications" && (notificationFailures > 0
+                ? (language === "ru" ? `${notificationFailures} требуют внимания` : `${notificationFailures} need attention`)
+                : (language === "ru" ? "Ошибок доставки нет" : "No delivery issues"))}
+              {activeSection === "settings" && (activeServerId
+                ? `${server?.serverName ?? "HomePlace"} · ${lastHeartbeat ? (language === "ru" ? "в сети" : "online") : (language === "ru" ? "не в сети" : "offline")}`
+                : (language === "ru" ? "Нет активного подключения" : "No active connection"))}
+            </p>
           </div>
         </div>
         <div className="titlebar-actions">
@@ -1595,6 +1612,17 @@ function MainApp() {
             >
               <Icon name="settings" size={15} />
               <span>{language === "ru" ? "Подключения" : "Connections"}</span>
+            </button>
+          )}
+          {activeSection === "clipboard" && (
+            <button
+              type="button"
+              className={`titlebar-context-action${clipboardSyncEnabled ? " active" : ""}`}
+              disabled={!clipboardSyncLoaded || clipboardSyncBusy || !activeServerId}
+              onClick={() => void updateClipboardSync(!clipboardSyncEnabled)}
+            >
+              <Icon name="clipboard" size={15} />
+              <span>{clipboardSyncEnabled ? ui.clipboard.on : ui.clipboard.off}</span>
             </button>
           )}
           <button
@@ -1985,17 +2013,6 @@ function MainApp() {
 
       {activeSection === "overview" && (
         <section className="section-stack" aria-label="Overview">
-          <article className="glass-card welcome-card">
-            <div>
-              <p className="eyebrow">{ui.overview.eyebrow}</p>
-              <h2>{lastHeartbeat ? ui.overview.connectedTitle : ui.overview.disconnectedTitle}</h2>
-              <p className="lead">{ui.overview.lead}</p>
-            </div>
-            <button type="button" onClick={() => setActiveSection("devices")}>
-              {profiles.length > 0 ? ui.overview.manage : ui.overview.connect}
-            </button>
-          </article>
-
           <section className="metric-grid" aria-label="Connection summary">
             <button type="button" className="glass-card metric-card" onClick={() => setActiveSection("devices")}>
               <span><Icon name="devices" size={21} /></span>
@@ -2030,23 +2047,6 @@ function MainApp() {
 
       {activeSection === "clipboard" && (
         <section className="section-stack" aria-label="Clipboard">
-          <article className="glass-card feature-hero">
-            <div className="feature-icon"><Icon name="clipboard" size={27} /></div>
-            <div>
-              <p className="eyebrow">{ui.clipboard.eyebrow}</p>
-              <h2>{ui.clipboard.title}</h2>
-              <p className="lead">{ui.clipboard.lead}</p>
-            </div>
-            <label className="switch-control">
-              <input
-                type="checkbox"
-                checked={clipboardSyncEnabled}
-                disabled={!clipboardSyncLoaded || clipboardSyncBusy || !activeServerId}
-                onChange={(event) => void updateClipboardSync(event.target.checked)}
-              />
-              <span>{clipboardSyncEnabled ? ui.clipboard.on : ui.clipboard.off}</span>
-            </label>
-          </article>
           {clipboardSyncError && <p className="setting-error">{clipboardSyncError}</p>}
           <section className="capability-grid">
             <article className="glass-card"><b>{ui.clipboard.textOnly}</b><p>{ui.clipboard.textHint}</p></article>
@@ -2099,14 +2099,6 @@ function MainApp() {
 
       {activeSection === "transfers" && (
         <section className="section-stack" aria-label="Transfers">
-          <article className="glass-card feature-hero compact">
-            <div className="feature-icon"><Icon name="transfer" size={27} /></div>
-            <div>
-              <p className="eyebrow">{ui.transfers.eyebrow}</p>
-              <h2>{ui.transfers.title}</h2>
-              <p className="lead">{ui.transfers.lead}</p>
-            </div>
-          </article>
           <article className="glass-card transfer-list">
             <div className="section-heading"><div><p className="eyebrow">{ui.transfers.inbox}</p><h3>{ui.transfers.waiting}</h3></div><span>{offers.length}</span></div>
             {offers.length === 0 ? (
@@ -2178,9 +2170,6 @@ function MainApp() {
 
       {activeSection === "automations" && (
         <section className="section-stack" aria-label="Automations">
-          <article className="glass-card feature-hero compact">
-            <div className="feature-icon"><Icon name="automation" size={27} /></div><div><p className="eyebrow">{ui.automations.eyebrow}</p><h2>{ui.automations.title}</h2><p className="lead">{ui.automations.lead}</p></div><span className="preview-badge">{ui.automations.preview}</span>
-          </article>
           <section className="automation-list">
             <article className="glass-card automation-row"><span>{ui.automations.android}</span><b>{ui.automations.magnet}</b><i>→</i><span>{ui.automations.torrent}</span><small>{ui.automations.planned}</small></article>
             <article className="glass-card automation-row"><span>{ui.automations.gaming}</span><b>{ui.automations.game}</b><i>→</i><span>{ui.automations.scene}</span><small>{ui.automations.planned}</small></article>
@@ -2192,15 +2181,6 @@ function MainApp() {
 
       {activeSection === "productivity" && (
         <section className="section-stack productivity-page" aria-label="Productivity">
-          <article className="glass-card productivity-hero">
-            <div>
-              <p className="eyebrow">{ui.productivity.eyebrow}</p>
-              <h2>{ui.productivity.title}</h2>
-              <p className="lead">{ui.productivity.lead}</p>
-            </div>
-            <span className="preview-badge">{ui.productivity.preview}</span>
-          </article>
-
           <div className="productivity-layout">
             <article className="glass-card calendar-card">
               <div className="section-heading calendar-heading">
