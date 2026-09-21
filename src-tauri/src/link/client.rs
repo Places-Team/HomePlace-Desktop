@@ -35,6 +35,7 @@ use crate::platform;
 
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_SHARE_FILE_BYTES: usize = 500 * 1024 * 1024;
+const FILE_TRANSFER_TIMEOUT_SECONDS: u64 = 30 * 60;
 const HEARTBEAT_EVENT: &str = "link-heartbeat";
 const HEALTHY_HEARTBEAT_SECONDS: u64 = 30;
 const MAX_RETRY_SECONDS: u64 = 5 * 60;
@@ -1072,7 +1073,7 @@ pub async fn send_share_file(target_device_id: String, file_path: String) -> Res
     let endpoint = base_url
         .join("api/link/mobile/share/file")
         .map_err(|_| "Could not create the file sharing API address.".to_string())?;
-    let response = http_client()?
+    let response = file_transfer_client()?
         .post(endpoint)
         .header("Accept", "application/json")
         .header("Content-Type", "application/octet-stream")
@@ -1086,7 +1087,7 @@ pub async fn send_share_file(target_device_id: String, file_path: String) -> Res
         .body(body)
         .send()
         .await
-        .map_err(|error| connection_error(&error))?;
+        .map_err(|error| file_transfer_connection_error(&error))?;
     match response.status().as_u16() {
         401 => Err("HomePlace rejected the device credential. Pair this device again.".into()),
         403 => {
@@ -1616,13 +1617,13 @@ async fn save_received_file(
     let endpoint = base_url
         .join(&format!("api/link/mobile/share/file/{}", offer.transfer_id))
         .map_err(|_| "Could not create the HomePlace file address.".to_string())?;
-    let response = http_client()?
+    let response = file_transfer_client()?
         .get(endpoint)
         .header("Accept", "application/octet-stream")
         .bearer_auth(credential)
         .send()
         .await
-        .map_err(|error| connection_error(&error))?;
+        .map_err(|error| file_transfer_connection_error(&error))?;
     if response.status().as_u16() == 401 {
         return Err("HomePlace rejected this device credential. Pair the device again.".into());
     }
@@ -2220,6 +2221,15 @@ fn http_client() -> Result<Client, String> {
         .map_err(|_| "Could not initialise the secure connection.".to_string())
 }
 
+fn file_transfer_client() -> Result<Client, String> {
+    Client::builder()
+        .redirect(Policy::none())
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(FILE_TRANSFER_TIMEOUT_SECONDS))
+        .build()
+        .map_err(|_| "Could not initialise secure file transfer.".to_string())
+}
+
 fn bounded_device_name(input: &str) -> Result<String, String> {
     let name = input.trim();
     if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
@@ -2406,6 +2416,16 @@ fn connection_error(error: &reqwest::Error) -> String {
         "Could not connect to the HomePlace server.".into()
     } else {
         "The Link API request failed.".into()
+    }
+}
+
+fn file_transfer_connection_error(error: &reqwest::Error) -> String {
+    if error.is_timeout() {
+        "The HomePlace file transfer did not finish within 30 minutes.".into()
+    } else if error.is_connect() {
+        "Could not connect to the HomePlace server for file transfer.".into()
+    } else {
+        "The HomePlace file transfer failed.".into()
     }
 }
 
