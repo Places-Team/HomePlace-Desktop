@@ -327,6 +327,10 @@ function MainApp() {
         decline: "Отклонить",
         edit: "Изменить",
         complete: "Выполнить",
+        snoozeTen: "Отложить на 10 минут",
+        snoozeHour: "Отложить на час",
+        tomorrow: "Перенести на завтра",
+        duplicate: "Создать копию",
         remove: "Удалить",
         clear: "Очистить историю",
         close: "Закрыть меню",
@@ -342,6 +346,10 @@ function MainApp() {
         decline: "Decline",
         edit: "Edit",
         complete: "Complete",
+        snoozeTen: "Snooze for 10 minutes",
+        snoozeHour: "Snooze for 1 hour",
+        tomorrow: "Move to tomorrow",
+        duplicate: "Duplicate",
         remove: "Delete",
         clear: "Clear history",
         close: "Close menu",
@@ -709,12 +717,18 @@ function MainApp() {
   const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const startOfTomorrow = new Date(startOfToday);
   startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
-  const overdueReminders = reminders.filter((reminder) => new Date(reminder.at) < startOfToday);
+  const reminderTime = (reminder: Reminder) => new Date(reminder.at).getTime();
+  const byReminderTime = (left: Reminder, right: Reminder) => reminderTime(left) - reminderTime(right);
+  const overdueReminders = reminders
+    .filter((reminder) => reminderTime(reminder) < today.getTime())
+    .sort(byReminderTime);
   const todayReminders = reminders.filter((reminder) => {
     const at = new Date(reminder.at);
-    return at >= startOfToday && at < startOfTomorrow;
-  });
-  const upcomingReminders = reminders.filter((reminder) => new Date(reminder.at) >= startOfTomorrow);
+    return at >= today && at < startOfTomorrow;
+  }).sort(byReminderTime);
+  const upcomingReminders = reminders
+    .filter((reminder) => new Date(reminder.at) >= startOfTomorrow)
+    .sort(byReminderTime);
 
   function clearConnectionHealth() {
     setLastHeartbeat(null);
@@ -1081,6 +1095,62 @@ function MainApp() {
     }
   }
 
+  async function duplicateCalendarEvent(event: CalendarEvent) {
+    if (calendarBusy) return;
+    setCalendarBusy(true);
+    setCalendarError(null);
+    try {
+      const suffix = language === "ru" ? " — копия" : " — copy";
+      const result = await invoke<CalendarSummary>("create_calendar_event", {
+        input: {
+          ...visibleCalendarRange(calendarMonthOffset),
+          summary: `${event.summary.slice(0, 300 - suffix.length)}${suffix}`,
+          start: event.start,
+          end: event.end,
+          allDay: event.allDay,
+          location: event.location ?? null,
+        },
+      });
+      setCalendarEvents(result.events);
+      setCalendarStatus(result.status);
+    } catch (reason) {
+      setCalendarError(errorMessage(reason));
+    } finally {
+      setCalendarBusy(false);
+    }
+  }
+
+  async function moveCalendarEventToTomorrow(event: CalendarEvent) {
+    if (calendarBusy) return;
+    setCalendarBusy(true);
+    setCalendarError(null);
+    try {
+      const originalStart = new Date(event.allDay ? `${event.start.slice(0, 10)}T12:00:00` : event.start);
+      const originalEnd = new Date(event.allDay ? `${event.end.slice(0, 10)}T12:00:00` : event.end);
+      const nextStart = new Date();
+      nextStart.setDate(nextStart.getDate() + 1);
+      nextStart.setHours(originalStart.getHours(), originalStart.getMinutes(), originalStart.getSeconds(), 0);
+      const nextEnd = new Date(nextStart.getTime() + (originalEnd.getTime() - originalStart.getTime()));
+      const result = await invoke<CalendarSummary>("update_calendar_event", {
+        id: event.id,
+        input: {
+          ...visibleCalendarRange(calendarMonthOffset),
+          summary: event.summary,
+          start: event.allDay ? localDayKey(nextStart) : nextStart.toISOString(),
+          end: event.allDay ? localDayKey(nextEnd) : nextEnd.toISOString(),
+          allDay: event.allDay,
+          location: event.location ?? null,
+        },
+      });
+      setCalendarEvents(result.events);
+      setCalendarStatus(result.status);
+    } catch (reason) {
+      setCalendarError(errorMessage(reason));
+    } finally {
+      setCalendarBusy(false);
+    }
+  }
+
   async function resolveReminder(action: "complete_reminder" | "delete_reminder", id: string) {
     if (reminderBusy) return;
     setReminderBusy(true);
@@ -1093,6 +1163,90 @@ function MainApp() {
     } finally {
       setReminderBusy(false);
     }
+  }
+
+  async function rescheduleReminder(reminder: Reminder, at: Date) {
+    if (reminderBusy) return;
+    setReminderBusy(true);
+    setReminderError(null);
+    try {
+      const items = await invoke<Reminder[]>("update_reminder", {
+        id: reminder.id,
+        title: reminder.title,
+        at: at.toISOString(),
+        repeat: reminder.repeat,
+      });
+      setReminders(items);
+    } catch (reason) {
+      setReminderError(errorMessage(reason));
+    } finally {
+      setReminderBusy(false);
+    }
+  }
+
+  function snoozeReminder(reminder: Reminder, minutes: number) {
+    const next = new Date(Math.max(today.getTime(), new Date(reminder.at).getTime()) + minutes * 60_000);
+    void rescheduleReminder(reminder, next);
+  }
+
+  function moveReminderToTomorrow(reminder: Reminder) {
+    const current = new Date(reminder.at);
+    const next = new Date();
+    next.setDate(next.getDate() + 1);
+    next.setHours(current.getHours(), current.getMinutes(), 0, 0);
+    void rescheduleReminder(reminder, next);
+  }
+
+  async function duplicateReminder(reminder: Reminder) {
+    if (reminderBusy) return;
+    setReminderBusy(true);
+    setReminderError(null);
+    try {
+      const suffix = language === "ru" ? " — копия" : " — copy";
+      const title = `${reminder.title.slice(0, 200 - suffix.length)}${suffix}`;
+      const items = await invoke<Reminder[]>("create_reminder", {
+        title,
+        at: reminder.at,
+        repeat: reminder.repeat,
+      });
+      setReminders(items);
+    } catch (reason) {
+      setReminderError(errorMessage(reason));
+    } finally {
+      setReminderBusy(false);
+    }
+  }
+
+  function reminderRepeatLabel(repeat: string) {
+    const labels: Record<string, [string, string]> = {
+      hourly: ["Каждый час", "Hourly"],
+      daily: ["Каждый день", "Daily"],
+      weekly: ["Каждую неделю", "Weekly"],
+      monthly: ["Каждый месяц", "Monthly"],
+      yearly: ["Каждый год", "Yearly"],
+    };
+    const label = labels[repeat];
+    return label ? label[language === "ru" ? 0 : 1] : repeat;
+  }
+
+  function reminderContextActions(reminder: Reminder): ContextAction[] {
+    return [
+      { label: contextLabels.complete, icon: "check", disabled: reminderBusy, run: () => void resolveReminder("complete_reminder", reminder.id) },
+      { label: contextLabels.edit, icon: "edit", disabled: reminderBusy, run: () => editReminder(reminder) },
+      { label: contextLabels.snoozeTen, icon: "focus", disabled: reminderBusy, run: () => snoozeReminder(reminder, 10) },
+      { label: contextLabels.snoozeHour, icon: "focus", disabled: reminderBusy, run: () => snoozeReminder(reminder, 60) },
+      { label: contextLabels.tomorrow, icon: "calendar", disabled: reminderBusy, run: () => moveReminderToTomorrow(reminder) },
+      { label: contextLabels.duplicate, icon: "plus", disabled: reminderBusy, run: () => void duplicateReminder(reminder) },
+      {
+        label: contextLabels.remove,
+        icon: "trash",
+        danger: true,
+        disabled: reminderBusy,
+        run: () => {
+          if (window.confirm(ui.productivity.deleteReminderConfirm)) void resolveReminder("delete_reminder", reminder.id);
+        },
+      },
+    ];
   }
 
   function reminderRows(items: Reminder[]) {
@@ -1108,19 +1262,7 @@ function MainApp() {
         <div
           className="reminder-item"
           key={reminder.id}
-          onContextMenu={(event) => openContextMenu(event, [
-            { label: contextLabels.complete, icon: "check", disabled: reminderBusy, run: () => void resolveReminder("complete_reminder", reminder.id) },
-            { label: contextLabels.edit, icon: "edit", disabled: reminderBusy, run: () => editReminder(reminder) },
-            {
-              label: contextLabels.remove,
-              icon: "trash",
-              danger: true,
-              disabled: reminderBusy,
-              run: () => {
-                if (window.confirm(ui.productivity.deleteReminderConfirm)) void resolveReminder("delete_reminder", reminder.id);
-              },
-            },
-          ])}
+          onContextMenu={(event) => openContextMenu(event, reminderContextActions(reminder))}
         >
           <button
             type="button"
@@ -1139,7 +1281,7 @@ function MainApp() {
                 hour: "2-digit",
                 minute: "2-digit",
               })}
-              {reminder.repeat !== "none" ? ` · ${reminder.repeat}` : ""}
+              {reminder.repeat !== "none" ? ` · ${reminderRepeatLabel(reminder.repeat)}` : ""}
             </small>
           </span>
           <button
@@ -1148,7 +1290,7 @@ function MainApp() {
             aria-label={`${ui.productivity.edit}: ${reminder.title}`}
             title={ui.productivity.edit}
             disabled={reminderBusy}
-            onClick={() => editReminder(reminder)}
+            onClick={(event) => openContextMenu(event, reminderContextActions(reminder))}
           >
             ···
           </button>
@@ -1891,6 +2033,8 @@ function MainApp() {
                           icon: "clipboard",
                           run: () => void navigator.clipboard.writeText(`${event.summary}${event.location ? ` · ${event.location}` : ""}`),
                         },
+                        { label: contextLabels.duplicate, icon: "plus", disabled: calendarBusy, run: () => void duplicateCalendarEvent(event) },
+                        { label: contextLabels.tomorrow, icon: "calendar", disabled: calendarBusy, run: () => void moveCalendarEventToTomorrow(event) },
                         { label: contextLabels.remove, icon: "trash", danger: true, disabled: calendarBusy, run: () => void removeCalendarEvent(event.id) },
                       ])}
                     >
@@ -2471,6 +2615,31 @@ function QuickShareWindow() {
     });
   }, [expanded]);
 
+  useEffect(() => {
+    void invoke("set_quick_share_pinned", { pinned: payload !== null }).catch((reason) => {
+      setError(errorMessage(reason));
+    });
+  }, [payload]);
+
+  const dismissShelf = useCallback(() => {
+    setPayload(null);
+    setText("");
+    setExpanded(false);
+    setSent(false);
+    setError(null);
+    void invoke("set_quick_share_pinned", { pinned: false }).finally(() => {
+      void getCurrentWindow().hide();
+    });
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) dismissShelf();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, dismissShelf]);
+
   async function send(target: ShareTarget) {
     if (!payload || busy) return;
     setBusy(target.id);
@@ -2488,6 +2657,11 @@ function QuickShareWindow() {
       setText("");
       setSent(true);
       loadTargets();
+      await invoke("set_quick_share_pinned", { pinned: false });
+      window.setTimeout(() => {
+        setExpanded(false);
+        void getCurrentWindow().hide();
+      }, 850);
     } catch (reason) {
       setError(errorMessage(reason));
     } finally {
@@ -2534,10 +2708,7 @@ function QuickShareWindow() {
         {expanded && <div className="tray-share-titlebar">
           <span><Icon name="transfer" size={17} /></span>
           <div><b>{language === "ru" ? "Быстрая отправка" : "Quick share"}</b><small>HomePlace Link</small></div>
-          <button type="button" onClick={() => {
-            setExpanded(false);
-            void getCurrentWindow().hide();
-          }}>×</button>
+          <button type="button" onClick={dismissShelf}>×</button>
         </div>}
         {expanded && <div className="quick-share-panel">
           <div className="quick-share-copy">
@@ -2548,7 +2719,7 @@ function QuickShareWindow() {
             <div className="quick-share-payload">
               <Icon name="transfer" size={17} />
               <span><b>{payload.label}</b><small>{language === "ru" ? `${payload.paths.length} файл(ов), до 500 МиБ каждый` : `${payload.paths.length} file(s), up to 500 MiB each`}</small></span>
-              <button type="button" onClick={() => setPayload(null)}>×</button>
+              <button type="button" onClick={dismissShelf}>×</button>
             </div>
           ) : (
             <textarea

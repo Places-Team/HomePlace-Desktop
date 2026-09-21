@@ -158,7 +158,9 @@ pub fn run() {
                     tauri::WindowEvent::Focused(focused) => {
                         if *focused {
                             QUICK_SHARE_WAS_FOCUSED.store(true, Ordering::Relaxed);
-                        } else if QUICK_SHARE_WAS_FOCUSED.swap(false, Ordering::Relaxed) {
+                        } else if QUICK_SHARE_WAS_FOCUSED.swap(false, Ordering::Relaxed)
+                            && !tray::quick_share_is_pinned()
+                        {
                             let _ = window.hide();
                         }
                     }
@@ -191,6 +193,7 @@ pub fn run() {
             native::take_pending_share,
             tray::open_quick_share,
             tray::set_quick_share_pointer_inside,
+            tray::set_quick_share_pinned,
             startup::startup_status,
             startup::set_startup_enabled,
             link::client::verify_server,

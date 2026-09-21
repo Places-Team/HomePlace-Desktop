@@ -16,6 +16,7 @@ pub const TRAY_ID: &str = "homeplace";
 const PROFILE_CHANGED_EVENT: &str = "link-profile-changed";
 static BACKGROUND_NOTICE_SHOWN: AtomicBool = AtomicBool::new(false);
 static QUICK_SHARE_POINTER_INSIDE: AtomicBool = AtomicBool::new(false);
+static QUICK_SHARE_PINNED: AtomicBool = AtomicBool::new(false);
 static LAST_TRAY_RECT: Mutex<Option<Rect>> = Mutex::new(None);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -340,7 +341,9 @@ fn show_quick_share<R: Runtime>(app: &AppHandle<R>, tray_rect: Rect, focus: bool
 fn schedule_quick_share_hide<R: Runtime>(app: AppHandle<R>) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(450)).await;
-        if QUICK_SHARE_POINTER_INSIDE.load(Ordering::Relaxed) {
+        if QUICK_SHARE_POINTER_INSIDE.load(Ordering::Relaxed)
+            || QUICK_SHARE_PINNED.load(Ordering::Relaxed)
+        {
             return;
         }
         let Some(window) = app.get_webview_window("quick-share") else {
@@ -355,6 +358,15 @@ fn schedule_quick_share_hide<R: Runtime>(app: AppHandle<R>) {
 #[tauri::command]
 pub fn set_quick_share_pointer_inside(inside: bool) {
     QUICK_SHARE_POINTER_INSIDE.store(inside, Ordering::Relaxed);
+}
+
+#[tauri::command]
+pub fn set_quick_share_pinned(pinned: bool) {
+    QUICK_SHARE_PINNED.store(pinned, Ordering::Relaxed);
+}
+
+pub fn quick_share_is_pinned() -> bool {
+    QUICK_SHARE_PINNED.load(Ordering::Relaxed)
 }
 
 pub fn set_connection_state<R: Runtime>(app: &AppHandle<R>, state: ConnectionState) {
