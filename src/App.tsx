@@ -211,6 +211,20 @@ function errorMessage(error: unknown): string {
     : "The HomePlace request could not be completed.";
 }
 
+function deviceCountLabel(count: number, language: Language): string {
+  if (language === "en") return `${count} ${count === 1 ? "device" : "devices"}`;
+  const remainder100 = count % 100;
+  const remainder10 = count % 10;
+  const noun = remainder100 >= 11 && remainder100 <= 14
+    ? "устройств"
+    : remainder10 === 1
+      ? "устройство"
+      : remainder10 >= 2 && remainder10 <= 4
+        ? "устройства"
+        : "устройств";
+  return `${count} ${noun}`;
+}
+
 function newTransferId(): string {
   return crypto.randomUUID().replaceAll("-", "");
 }
@@ -1553,11 +1567,36 @@ function MainApp() {
       <div className="app-content">
 
       <header className="titlebar" data-tauri-drag-region>
-        <div>
-          <p className="eyebrow">HomePlace Link · Desktop</p>
-          <h1>{ui.nav[activeSection]}</h1>
+        <div className="titlebar-heading">
+          <span className="titlebar-section-icon" aria-hidden>
+            <Icon name={navigation.find((item) => item.id === activeSection)?.icon ?? "home"} size={21} />
+          </span>
+          <div>
+            <h1>{ui.nav[activeSection]}</h1>
+            {activeSection === "devices" && (
+              <p className="titlebar-subtitle">
+                {!activeServerId
+                  ? (language === "ru" ? "HomePlace не подключён" : "HomePlace is not connected")
+                  : !accountDevicesLoaded
+                    ? (language === "ru" ? "Загружаем устройства…" : "Loading devices…")
+                    : accountDevicesError
+                      ? (language === "ru" ? "Устройства временно недоступны" : "Devices are temporarily unavailable")
+                      : `${deviceCountLabel(accountDevices.length, language)} · ${accountDevices.filter((item) => item.online).length} ${language === "ru" ? "в сети" : "online"}`}
+              </p>
+            )}
+          </div>
         </div>
         <div className="titlebar-actions">
+          {activeSection === "devices" && (
+            <button
+              type="button"
+              className="titlebar-context-action"
+              onClick={() => setActiveSection("settings")}
+            >
+              <Icon name="settings" size={15} />
+              <span>{language === "ru" ? "Подключения" : "Connections"}</span>
+            </button>
+          )}
           <button
             type="button"
             className="theme-toggle"
@@ -1577,18 +1616,6 @@ function MainApp() {
 
       {activeSection === "devices" && (
         <section className="section-stack account-devices-page" aria-label={ui.nav.devices}>
-          <article className="glass-card feature-hero compact device-network-hero">
-            <div className="feature-icon"><Icon name="devices" size={28} /></div>
-            <div>
-              <p className="eyebrow">HomePlace Link</p>
-              <h2>{language === "ru" ? "Устройства вашего аккаунта" : "Your account devices"}</h2>
-              <p className="lead">{language === "ru" ? "Все компьютеры и телефоны, связанные с текущим аккаунтом HomePlace. Подключение серверов теперь находится в настройках." : "Every computer and phone linked to this HomePlace account. Server connections are now managed in Settings."}</p>
-            </div>
-            <button type="button" className="subtle-action" onClick={() => setActiveSection("settings")}>
-              <Icon name="settings" size={16} /> {language === "ru" ? "Подключения" : "Connections"}
-            </button>
-          </article>
-
           {!activeServerId ? (
             <div className="glass-card empty-state"><span><Icon name="link" size={20} /></span><b>{language === "ru" ? "Сначала подключите HomePlace" : "Connect HomePlace first"}</b><p>{language === "ru" ? "Управление подключением находится в настройках." : "Connection management is available in Settings."}</p></div>
           ) : !accountDevicesLoaded ? (
