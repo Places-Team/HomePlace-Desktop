@@ -15,6 +15,14 @@ type ConnectionState =
   | "pairing"
   | "connected";
 
+type ThemeMode = "dark" | "light";
+
+function storedTheme(): ThemeMode {
+  const saved = window.localStorage.getItem("homeplace-theme");
+  if (saved === "dark" || saved === "light") return saved;
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
 type VerifiedServer = {
   address: string;
   serverId: string;
@@ -223,15 +231,17 @@ function visibleCalendarRange(monthOffset: number): { from: string; to: string }
 }
 
 export function App() {
-  const windowLabel = getCurrentWindow().label;
+  const windowLabel = "__TAURI_INTERNALS__" in window ? getCurrentWindow().label : "main";
   useLayoutEffect(() => {
     document.documentElement.dataset.window = windowLabel;
+    document.documentElement.dataset.theme = storedTheme();
   }, [windowLabel]);
   return windowLabel === "quick-share" ? <QuickShareWindow /> : <MainApp />;
 }
 
 function MainApp() {
   const [activeSection, setActiveSection] = useState<AppSection>("overview");
+  const [theme, setTheme] = useState<ThemeMode>(storedTheme);
   const [language, setLanguage] = useState<Language>(() => {
     const saved = window.localStorage.getItem("homeplace-language");
     if (saved === "en" || saved === "ru") return saved;
@@ -398,6 +408,12 @@ function MainApp() {
     window.localStorage.setItem("homeplace-language", language);
     document.documentElement.lang = language;
   }, [language]);
+
+  useEffect(() => {
+    window.localStorage.setItem("homeplace-theme", theme);
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+  }, [theme]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -1221,6 +1237,15 @@ function MainApp() {
           <h1>{ui.nav[activeSection]}</h1>
         </div>
         <div className="titlebar-actions">
+          <button
+            type="button"
+            className="theme-toggle"
+            aria-label={language === "ru" ? "Сменить тему" : "Change theme"}
+            title={language === "ru" ? "Сменить тему" : "Change theme"}
+            onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+          >
+            <Icon name={theme === "dark" ? "sun" : "moon"} size={16} />
+          </button>
           <div className="language-switcher" aria-label={ui.language}>
             <button type="button" className={language === "ru" ? "active" : undefined} onClick={() => setLanguage("ru")}>RU</button>
             <button type="button" className={language === "en" ? "active" : undefined} onClick={() => setLanguage("en")}>EN</button>
@@ -1982,6 +2007,31 @@ function MainApp() {
 
       {activeSection === "settings" && (
         <section className="section-stack" aria-label="Settings">
+          <article className="glass-card settings-panel appearance-panel">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">{language === "ru" ? "Интерфейс" : "Interface"}</p>
+                <h3>{language === "ru" ? "Внешний вид" : "Appearance"}</h3>
+              </div>
+              <span>{language === "ru" ? "Основа тем" : "Theme foundation"}</span>
+            </div>
+            <div className="theme-choices" role="group" aria-label={language === "ru" ? "Тема оформления" : "Color theme"}>
+              <button type="button" className={theme === "light" ? "active" : undefined} onClick={() => setTheme("light")}>
+                <span className="theme-preview light-preview" aria-hidden><i /><i /><i /></span>
+                <b>{language === "ru" ? "Светлая" : "Light"}</b>
+                <small>{language === "ru" ? "Мягкий дневной контраст" : "Soft daylight contrast"}</small>
+              </button>
+              <button type="button" className={theme === "dark" ? "active" : undefined} onClick={() => setTheme("dark")}>
+                <span className="theme-preview dark-preview" aria-hidden><i /><i /><i /></span>
+                <b>{language === "ru" ? "Тёмная" : "Dark"}</b>
+                <small>{language === "ru" ? "Глубокие спокойные поверхности" : "Deep, quiet surfaces"}</small>
+              </button>
+              <div className="theme-future">
+                <Icon name="settings" size={18} />
+                <span><b>{language === "ru" ? "Свои темы — дальше" : "Custom themes next"}</b><small>{language === "ru" ? "Палитра уже построена на заменяемых токенах." : "The palette already uses replaceable design tokens."}</small></span>
+              </div>
+            </div>
+          </article>
           <article className="glass-card settings-panel">
             <div className="section-heading"><div><p className="eyebrow">{ui.settings.application}</p><h3>{ui.settings.general}</h3></div></div>
             <label className="settings-row"><span><b>{ui.settings.startup}</b><small>{ui.settings.startupHint}</small></span><input type="checkbox" checked={startupEnabled} disabled={!startupLoaded || startupBusy} onChange={(event) => void updateStartup(event.target.checked)} /></label>

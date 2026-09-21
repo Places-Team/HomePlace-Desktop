@@ -6,6 +6,13 @@ HomePlace Desktop shares information architecture, terminology and core states,
 not one rigid window treatment. Each operating system should feel deliberately
 supported.
 
+The shared visual language avoids generic dashboard grids, decorative gradient
+glows and a card around every fragment of content. It uses continuous planes,
+rules, asymmetric edge details and typography to establish hierarchy. Dark and
+light modes are expressed entirely through semantic CSS tokens (`canvas`,
+`panel`, `text`, `line`, `accent`, and state colours). Future user themes must
+override those tokens instead of introducing component-specific colour rules.
+
 ## macOS
 
 The macOS shell is the leading visual implementation.
@@ -58,4 +65,3 @@ Every shell presents the same product states:
 
 Visual components may differ, but state names and recovery actions must remain
 consistent so documentation and support apply across platforms.
-

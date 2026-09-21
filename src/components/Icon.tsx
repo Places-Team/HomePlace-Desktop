@@ -14,6 +14,8 @@ export type IconName =
   | "edit"
   | "trash"
   | "refresh"
+  | "sun"
+  | "moon"
   | "open";
 
 const paths: Record<IconName, ReactNode> = {
@@ -32,6 +34,8 @@ const paths: Record<IconName, ReactNode> = {
   edit: <><path d="M4 20h4l11-11-4-4L4 16v4Z" /><path d="m13.5 6.5 4 4" /></>,
   trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14" /><path d="M10 11v6M14 11v6" /></>,
   refresh: <><path d="M20 7v5h-5" /><path d="M4 17v-5h5" /><path d="M6.1 9a7 7 0 0 1 11.4-2L20 9M4 15l2.5 2A7 7 0 0 0 18 15" /></>,
+  sun: <><circle cx="12" cy="12" r="3.5" /><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42" /></>,
+  moon: <path d="M20.4 15.2A8.4 8.4 0 0 1 8.8 3.6 8.6 8.6 0 1 0 20.4 15.2Z" />,
   open: <><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6" /></>,
 };
 
