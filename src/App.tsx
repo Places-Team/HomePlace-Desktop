@@ -16,6 +16,7 @@ type ConnectionState =
   | "connected";
 
 type ThemeMode = "dark" | "light";
+const isTauriRuntime = "__TAURI_INTERNALS__" in window;
 
 function storedTheme(): ThemeMode {
   const saved = window.localStorage.getItem("homeplace-theme");
@@ -231,7 +232,7 @@ function visibleCalendarRange(monthOffset: number): { from: string; to: string }
 }
 
 export function App() {
-  const windowLabel = "__TAURI_INTERNALS__" in window ? getCurrentWindow().label : "main";
+  const windowLabel = isTauriRuntime ? getCurrentWindow().label : "main";
   useLayoutEffect(() => {
     document.documentElement.dataset.window = windowLabel;
     document.documentElement.dataset.theme = storedTheme();
@@ -432,6 +433,7 @@ function MainApp() {
   }, [contextMenu]);
 
   useEffect(() => {
+    if (!isTauriRuntime) return;
     let cancelled = false;
     let stopListening: (() => void) | undefined;
     void listen<string>("navigate-section", ({ payload }) => {
@@ -461,6 +463,7 @@ function MainApp() {
   }, [activeSection, lastHeartbeat]);
 
   useEffect(() => {
+    if (!isTauriRuntime) return;
     let cancelled = false;
     let stopListening: (() => void) | undefined;
     void listen<string>("link-profile-changed", () => {
@@ -553,7 +556,7 @@ function MainApp() {
   }, [pairing, pollAttempt, server, state]);
 
   useEffect(() => {
-    if (!activeServerId) return;
+    if (!isTauriRuntime || !activeServerId) return;
     let cancelled = false;
     let stopListening: (() => void) | undefined;
 
@@ -2204,6 +2207,7 @@ function ShareComposer({ language }: { language: Language }) {
 
   useEffect(() => {
     loadTargets();
+    if (!isTauriRuntime) return;
     let cancelled = false;
     let stopDrop: (() => void) | undefined;
     void getCurrentWebview().onDragDropEvent((event) => {
