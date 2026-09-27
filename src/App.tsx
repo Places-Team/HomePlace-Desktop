@@ -606,6 +606,30 @@ function MainApp() {
   }, [activeSection, lastHeartbeat]);
 
   useEffect(() => {
+    if (!isTauriRuntime || activeSection !== "clipboard") return;
+    let cancelled = false;
+    let stopListening: (() => void) | undefined;
+    void listen("clipboard-history-changed", () => {
+      void invoke<ClipboardHistoryEntry[]>("clipboard_history")
+        .then((entries) => {
+          if (!cancelled) {
+            setClipboardHistory(entries);
+            setClipboardHistoryError(null);
+          }
+        })
+        .catch((reason) => {
+          if (!cancelled) setClipboardHistoryError(errorMessage(reason));
+        });
+    }).then((unlisten) => {
+      if (cancelled) unlisten(); else stopListening = unlisten;
+    });
+    return () => {
+      cancelled = true;
+      stopListening?.();
+    };
+  }, [activeSection]);
+
+  useEffect(() => {
     if (!isTauriRuntime) return;
     let cancelled = false;
     let stopListening: (() => void) | undefined;
@@ -2247,13 +2271,13 @@ function MainApp() {
             {clipboardHistory.length === 0 ? (
               <div className="empty-state"><span><Icon name="clipboard" size={19} /></span><b>{language === "ru" ? "История пока пуста" : "History is empty"}</b><p>{language === "ru" ? "Здесь появится отправленный и полученный текст." : "Sent and received text will appear here."}</p></div>
             ) : clipboardHistory.map((item) => (
-              <button
-                type="button"
-                className="clipboard-history-row"
-                key={item.id}
-                title={language === "ru" ? "Скопировать снова" : "Copy again"}
-                onClick={() => void navigator.clipboard.writeText(item.text)}
-                onContextMenu={(event) => openContextMenu(event, [
+              <div className="clipboard-history-entry" key={item.id}>
+                <button
+                  type="button"
+                  className="clipboard-history-row"
+                  title={language === "ru" ? "Скопировать снова" : "Copy again"}
+                  onClick={() => void navigator.clipboard.writeText(item.text)}
+                  onContextMenu={(event) => openContextMenu(event, [
                   { label: contextLabels.copy, icon: "clipboard", run: () => void navigator.clipboard.writeText(item.text) },
                   { label: contextLabels.send, icon: "transfer", disabled: !activeServerId, run: () => openQuickShare(item.text) },
                   {
@@ -2266,11 +2290,15 @@ function MainApp() {
                         .catch((reason) => setClipboardHistoryError(errorMessage(reason)));
                     },
                   },
-                ])}
-              >
-                <span>{item.direction === "received" ? "↓" : "↑"}</span>
-                <span><b>{item.text}</b><small>{new Date(item.createdAt).toLocaleString()}</small></span>
-              </button>
+                  ])}
+                >
+                  <span>{item.direction === "received" ? "↓" : "↑"}</span>
+                  <span><b>{item.text}</b><small>{new Date(item.createdAt).toLocaleString()}</small></span>
+                </button>
+                <button type="button" className="clipboard-history-share" disabled={!activeServerId} onClick={() => openQuickShare(item.text)} aria-label={language === "ru" ? "Отправить на устройство" : "Send to a device"} title={language === "ru" ? "Отправить на устройство" : "Send to a device"}>
+                  <Icon name="transfer" size={17} />
+                </button>
+              </div>
             ))}
             {clipboardHistoryError && <p className="setting-error" role="alert">{clipboardHistoryError}</p>}
           </article>

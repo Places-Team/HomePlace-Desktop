@@ -1382,3 +1382,8 @@ html[data-theme="light"] .offer-copy b { color: var(--text-soft); }
 .notification-history-row-title time { color: var(--muted); font-size: 12px; }
 .notification-history-row p { margin: 6px 0 0; color: var(--text-soft); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .notification-history-more { margin-top: 14px; }
+.clipboard-history-entry { display: flex; align-items: stretch; border-top: 1px solid var(--line); }
+.clipboard-history-entry .clipboard-history-row { flex: 1; min-width: 0; border-top: 0; cursor: pointer; }
+.clipboard-history-share { display: grid; flex: 0 0 42px; place-items: center; align-self: center; height: 38px; margin-left: 8px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel-strong); color: var(--accent-strong); cursor: pointer; }
+.clipboard-history-share:hover { background: var(--accent-soft); }
+.clipboard-history-share:disabled { opacity: .45; cursor: default; }

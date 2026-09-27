@@ -7,7 +7,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -41,6 +41,7 @@ const HEALTHY_HEARTBEAT_SECONDS: u64 = 30;
 const MAX_RETRY_SECONDS: u64 = 5 * 60;
 const CLIPBOARD_POLL_MILLISECONDS: u64 = 900;
 const MAX_CLIPBOARD_HISTORY_ITEMS: usize = 50;
+const CLIPBOARD_HISTORY_EVENT: &str = "clipboard-history-changed";
 
 pub struct HeartbeatService {
     wake: mpsc::Sender<()>,
@@ -850,16 +851,19 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
     });
     tauri::async_runtime::spawn(async move {
         let mut context: Option<(String, bool)> = None;
+        let mut last_failure: Option<(String, Instant, u32)> = None;
         loop {
             sleep(Duration::from_millis(CLIPBOARD_POLL_MILLISECONDS)).await;
             let Some(profile) = identity::load_profile().ok().flatten() else {
                 context = None;
+                last_failure = None;
                 polling_clipboard_enabled.store(false, Ordering::Relaxed);
                 continue;
             };
             let enabled = polling_clipboard_enabled.load(Ordering::Relaxed);
             let next_context = (profile.server_id.clone(), enabled);
             if context.as_ref() != Some(&next_context) {
+                last_failure = None;
                 if let Ok(text) = clipboard_app.clipboard().read_text()
                     && let Ok(mut current) = polling_clipboard_hash.lock()
                 {
@@ -878,27 +882,40 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
                 continue;
             }
             let digest = clipboard_digest(&text);
-            let changed = if let Ok(mut current) = polling_clipboard_hash.lock() {
-                if current.as_deref() == Some(digest.as_str()) {
-                    false
-                } else {
-                    *current = Some(digest);
-                    true
-                }
-            } else {
-                false
-            };
-            if !changed {
+            if polling_clipboard_hash
+                .lock()
+                .ok()
+                .is_some_and(|current| current.as_deref() == Some(digest.as_str()))
+            {
+                continue;
+            }
+            if clipboard_retry_pending(&digest, last_failure.as_ref(), Instant::now()) {
                 continue;
             }
             let Ok(credential) = identity::load_credential(&profile.server_id) else {
                 continue;
             };
-            if relay_clipboard_update(&profile, credential.as_str(), &text)
-                .await
-                .is_ok()
-            {
-                let _ = record_clipboard_history(&clipboard_app, &text, "sent");
+            match relay_clipboard_update(&profile, credential.as_str(), &text).await {
+                Ok(()) => {
+                    last_failure = None;
+                    if clipboard_app
+                        .clipboard()
+                        .read_text()
+                        .ok()
+                        .is_some_and(|current| clipboard_digest(&current) == digest)
+                        && let Ok(mut current) = polling_clipboard_hash.lock()
+                    {
+                        *current = Some(digest);
+                    }
+                    let _ = record_clipboard_history(&clipboard_app, &text, "sent");
+                }
+                Err(_) => {
+                    let attempts = last_failure
+                        .as_ref()
+                        .filter(|(failed_digest, _, _)| failed_digest == &digest)
+                        .map_or(1, |(_, _, attempts)| attempts.saturating_add(1));
+                    last_failure = Some((digest, Instant::now(), attempts));
+                }
             }
         }
     });
@@ -1804,7 +1821,9 @@ fn record_clipboard_history(app: &AppHandle, text: &str, direction: &str) -> Res
     let encoded = serde_json::to_vec(&entries)
         .map_err(|_| "Could not encode clipboard history.".to_string())?;
     fs::write(clipboard_history_path(app)?, encoded)
-        .map_err(|_| "Could not save clipboard history.".to_string())
+        .map_err(|_| "Could not save clipboard history.".to_string())?;
+    let _ = app.emit(CLIPBOARD_HISTORY_EVENT, ());
+    Ok(())
 }
 
 async fn relay_clipboard_update(
@@ -1834,6 +1853,46 @@ fn heartbeat_retry_delay(failures: u32) -> Duration {
             .saturating_mul(1_u64 << exponent)
             .min(MAX_RETRY_SECONDS),
     )
+}
+
+fn clipboard_retry_delay(attempts: u32) -> Duration {
+    Duration::from_secs(
+        5_u64
+            .saturating_mul(1_u64 << attempts.saturating_sub(1).min(4))
+            .min(60),
+    )
+}
+
+fn clipboard_retry_pending(
+    digest: &str,
+    last_failure: Option<&(String, Instant, u32)>,
+    now: Instant,
+) -> bool {
+    last_failure.is_some_and(|(failed_digest, at, attempts)| {
+        failed_digest == digest && now.duration_since(*at) < clipboard_retry_delay(*attempts)
+    })
+}
+
+#[cfg(test)]
+mod clipboard_retry_tests {
+    use super::*;
+
+    #[test]
+    fn retries_failed_clipboard_updates_with_a_bounded_backoff() {
+        assert_eq!(clipboard_retry_delay(1), Duration::from_secs(5));
+        assert_eq!(clipboard_retry_delay(2), Duration::from_secs(10));
+        assert_eq!(clipboard_retry_delay(3), Duration::from_secs(20));
+        assert_eq!(clipboard_retry_delay(100), Duration::from_secs(60));
+        let now = Instant::now();
+        let failure = ("first".to_string(), now, 1);
+        assert!(clipboard_retry_pending("first", Some(&failure), now));
+        assert!(!clipboard_retry_pending("second", Some(&failure), now));
+        assert!(!clipboard_retry_pending(
+            "first",
+            Some(&failure),
+            now + Duration::from_secs(5)
+        ));
+    }
 }
 
 async fn heartbeat_request(
