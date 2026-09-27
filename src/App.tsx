@@ -157,7 +157,7 @@ type Reminder = {
 };
 
 type CompletedReminder = Reminder & {
-  completedAt: string;
+  completedAt: string | null;
 };
 
 type ReminderBucket = "overdue" | "today" | "upcoming";
@@ -744,71 +744,103 @@ function MainApp() {
   }, [activeServerId]);
 
   useEffect(() => {
-    if (!activeServerId) return;
+    if (!activeServerId || activeSection !== "productivity" || calendarBusy) return;
     let cancelled = false;
+    let inFlight = false;
     const range = visibleCalendarRange(calendarMonthOffset);
-    invoke<CalendarSummary>("list_calendar_events", range)
-      .then((result) => {
+    function refresh() {
+      if (cancelled || inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
+      invoke<CalendarSummary>("list_calendar_events", range)
+        .then((result) => {
+          if (cancelled) return;
+          setCalendarEvents(result.events);
+          setCalendarStatus(result.status);
+          setCalendarError(null);
+        })
+        .catch((reason) => {
+          if (!cancelled) setCalendarError(errorMessage(reason));
+        })
+        .finally(() => {
+          inFlight = false;
+          if (!cancelled) setCalendarLoaded(true);
+        });
+    }
+    void refresh();
+    const timer = window.setInterval(refresh, 45_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [activeServerId, activeSection, calendarBusy, calendarMonthOffset]);
+
+  useEffect(() => {
+    if (!activeServerId || activeSection !== "productivity" || reminderBusy) return;
+    let cancelled = false;
+    let inFlight = false;
+    function refresh() {
+      if (cancelled || inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
+      Promise.allSettled([
+        invoke<Reminder[]>("list_reminders"),
+        invoke<CompletedReminder[]>("list_completed_reminders"),
+      ]).then(([active, completed]) => {
         if (cancelled) return;
-        setCalendarEvents(result.events);
-        setCalendarStatus(result.status);
-      })
-      .catch((reason) => {
-        if (!cancelled) setCalendarError(errorMessage(reason));
-      })
-      .finally(() => {
-        if (!cancelled) setCalendarLoaded(true);
-      });
+        if (active.status === "fulfilled") setReminders(active.value);
+        if (completed.status === "fulfilled") setCompletedReminders(completed.value);
+        const failure = active.status === "rejected" ? active.reason : completed.status === "rejected" ? completed.reason : null;
+        setReminderError(failure === null ? null : errorMessage(failure));
+        setRemindersLoaded(true);
+      }).finally(() => { inFlight = false; });
+    }
+    void refresh();
+    const timer = window.setInterval(refresh, 45_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
     };
-  }, [activeServerId, calendarMonthOffset]);
+  }, [activeServerId, activeSection, reminderBusy]);
 
   useEffect(() => {
-    if (!activeServerId) return;
+    if (!activeServerId || activeSection !== "devices") return;
     let cancelled = false;
-    invoke<Reminder[]>("list_reminders")
-      .then((items) => {
-        if (!cancelled) setReminders(items);
-      })
-      .catch((reason) => {
-        if (!cancelled) setReminderError(errorMessage(reason));
-      })
-      .finally(() => {
-        if (!cancelled) setRemindersLoaded(true);
-      });
-    invoke<CompletedReminder[]>("list_completed_reminders")
-      .then((items) => {
-        if (!cancelled) setCompletedReminders(items);
-      })
-      .catch((reason) => {
-        if (!cancelled) setReminderError(errorMessage(reason));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeServerId]);
-
-  useEffect(() => {
-    if (!activeServerId) return;
-    let cancelled = false;
-    invoke<AccountDevice[]>("list_account_devices")
-      .then((items) => {
-        if (!cancelled) {
+    let inFlight = false;
+    function refresh() {
+      if (cancelled || inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
+      invoke<AccountDevice[]>("list_account_devices")
+        .then((items) => {
+          if (cancelled) return;
           setAccountDevices(items);
           setAccountDevicesError(null);
-        }
-      })
-      .catch((reason) => {
-        if (!cancelled) setAccountDevicesError(errorMessage(reason));
-      })
-      .finally(() => {
-        if (!cancelled) setAccountDevicesLoaded(true);
-      });
+        })
+        .catch((reason) => {
+          if (!cancelled) setAccountDevicesError(errorMessage(reason));
+        })
+        .finally(() => {
+          inFlight = false;
+          if (!cancelled) setAccountDevicesLoaded(true);
+        });
+    }
+    void refresh();
+    const timer = window.setInterval(refresh, 60_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
     };
-  }, [activeServerId, lastHeartbeat]);
+  }, [activeServerId, activeSection]);
 
   useEffect(() => {
     if (!activeServerId) return;
@@ -1627,7 +1659,9 @@ function MainApp() {
         <span className="reminder-complete-mark"><Icon name="check" size={10} /></span>
         <button type="button" className="reminder-copy" aria-expanded={expandedReminderIds.has(reminder.id)} onClick={() => toggleReminderExpanded(reminder.id)}>
           <b>{reminder.title}</b>
-          <small>{language === "ru" ? "Выполнено" : "Completed"} {new Date(reminder.completedAt).toLocaleString(language === "ru" ? "ru-RU" : "en-US", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</small>
+          <small>{reminder.completedAt
+            ? `${language === "ru" ? "Выполнено" : "Completed"} ${new Date(reminder.completedAt).toLocaleString(language === "ru" ? "ru-RU" : "en-US", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`
+            : (language === "ru" ? "Дата выполнения неизвестна" : "Completion date unavailable")}</small>
         </button>
         <button type="button" className="reminder-restore" disabled={reminderBusy} onClick={() => void restoreCompletedReminder(reminder.id)} title={contextLabels.restore}><Icon name="refresh" size={12} /></button>
       </div>

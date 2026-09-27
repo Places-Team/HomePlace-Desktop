@@ -37,9 +37,22 @@ export function TelegramStatus({ activeServerId, language }: { activeServerId: s
   }, [ru]);
 
   useEffect(() => {
-    if (activeServerId) void load();
+    if (!activeServerId) return;
+    const version = ++requestVersion.current;
+    invoke<Status>("link_telegram_status")
+      .then((result) => {
+        if (version === requestVersion.current) setStatus(result);
+      })
+      .catch((reason) => {
+        if (version !== requestVersion.current) return;
+        setStatus(null);
+        setError(detail(reason, ru));
+      })
+      .finally(() => {
+        if (version === requestVersion.current) setLoading(false);
+      });
     return () => { requestVersion.current += 1; };
-  }, [activeServerId, load]);
+  }, [activeServerId, ru]);
 
   function refresh() {
     if (!activeServerId || loading) return;

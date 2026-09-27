@@ -112,10 +112,18 @@ export function ServerWorkspace({ kind, language, activeServerId, onOpenConnecti
       .finally(() => {
         if (version === overviewVersion.current) setLoading(false);
       });
-    const timer = window.setInterval(() => {
+    const wake = () => {
       if (document.visibilityState === "visible") void refresh();
-    }, 60_000);
-    return () => { overviewVersion.current += 1; window.clearInterval(timer); };
+    };
+    const timer = window.setInterval(wake, 60_000);
+    window.addEventListener("focus", wake);
+    document.addEventListener("visibilitychange", wake);
+    return () => {
+      overviewVersion.current += 1;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", wake);
+      document.removeEventListener("visibilitychange", wake);
+    };
   }, [activeServerId, refresh]);
 
   async function search(event: FormEvent) {

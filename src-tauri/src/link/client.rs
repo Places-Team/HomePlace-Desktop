@@ -168,7 +168,7 @@ pub struct CompletedReminderSummary {
     title: String,
     at: String,
     repeat: String,
-    completed_at: String,
+    completed_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2452,14 +2452,18 @@ pub async fn list_completed_reminders() -> Result<Vec<CompletedReminderSummary>,
     ensure_reminder_access(&response)?;
     ensure_success(&response, "completed reminders")?;
     let envelope: ReminderHistoryEnvelope = read_bounded_json(response).await?;
+    normalize_completed_reminders(envelope)
+}
+
+fn normalize_completed_reminders(
+    envelope: ReminderHistoryEnvelope,
+) -> Result<Vec<CompletedReminderSummary>, String> {
     let mut completed = Vec::new();
     for reminder in envelope.reminders {
         if !reminder.done {
             continue;
         }
-        let completed_at = reminder.completed_at.ok_or_else(|| {
-            "The HomePlace server returned an invalid completed reminder.".to_string()
-        })?;
+        let completed_at = reminder.completed_at;
         let active = ReminderSummary {
             id: reminder.id.clone(),
             title: reminder.title.clone(),
@@ -2467,8 +2471,11 @@ pub async fn list_completed_reminders() -> Result<Vec<CompletedReminderSummary>,
             repeat: reminder.repeat.clone(),
         };
         validate_reminders(vec![active])?;
-        OffsetDateTime::parse(&completed_at, &Rfc3339)
-            .map_err(|_| "The HomePlace server returned an invalid completion time.".to_string())?;
+        if let Some(value) = &completed_at {
+            OffsetDateTime::parse(value, &Rfc3339).map_err(|_| {
+                "The HomePlace server returned an invalid completion time.".to_string()
+            })?;
+        }
         completed.push(CompletedReminderSummary {
             id: reminder.id,
             title: reminder.title,
@@ -3424,6 +3431,34 @@ mod tests {
             repeat: "weekly".into(),
         };
         assert!(validate_reminders(vec![invalid]).is_err());
+    }
+
+    #[test]
+    fn completed_reminders_keep_legacy_entries_without_completion_dates() {
+        let at = "2026-09-20T08:00:00.000Z".to_string();
+        let reminders = vec![
+            OverviewReminderSummary {
+                id: "legacy_reminder".into(),
+                title: "Old task".into(),
+                at: at.clone(),
+                repeat: "none".into(),
+                done: true,
+                completed_at: None,
+            },
+            OverviewReminderSummary {
+                id: "recent_reminder".into(),
+                title: "Recent task".into(),
+                at,
+                repeat: "none".into(),
+                done: true,
+                completed_at: Some("2026-09-21T08:00:00.000Z".into()),
+            },
+        ];
+        let result = normalize_completed_reminders(ReminderHistoryEnvelope { reminders }).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, "recent_reminder");
+        assert_eq!(result[1].id, "legacy_reminder");
+        assert_eq!(result[1].completed_at, None);
     }
 
     #[test]
