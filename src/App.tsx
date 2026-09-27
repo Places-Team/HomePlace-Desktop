@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { FormEvent, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { FormEvent, Fragment, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { IdeasBoard } from "./components/IdeasBoard";
 import { ServerWorkspace } from "./components/ServerWorkspace";
@@ -1681,9 +1681,14 @@ function MainApp() {
 
         <nav className="sidebar-nav">
           {navigation.map((item) => (
+            <Fragment key={item.id}>
+              {(item.id === "overview" || item.id === "devices" || item.id === "automations") && (
+                <span className="sidebar-nav-group-label" aria-hidden="true">
+                  {item.id === "overview" ? (language === "ru" ? "Рабочее" : "Workspace") : item.id === "devices" ? (language === "ru" ? "Связь" : "Connected") : (language === "ru" ? "Ещё" : "More")}
+                </span>
+              )}
             <button
               type="button"
-              key={item.id}
               className={activeSection === item.id ? "active" : undefined}
               aria-current={activeSection === item.id ? "page" : undefined}
               aria-label={ui.nav[item.id]}
@@ -1701,6 +1706,7 @@ function MainApp() {
                 <small>{notificationFailures}</small>
               )}
             </button>
+            </Fragment>
           ))}
         </nav>
 
@@ -1739,10 +1745,10 @@ function MainApp() {
               {activeSection === "transfers" && (language === "ru"
                 ? `${offers.length} входящих · ${transferHistory.length} в истории`
                 : `${offers.length} incoming · ${transferHistory.length} in history`)}
-              {activeSection === "automations" && (language === "ru" ? "3 запланированных сценария" : "3 planned scenarios")}
+              {activeSection === "automations" && (language === "ru" ? "Пока недоступны в Desktop" : "Not available in Desktop yet")}
               {activeSection === "productivity" && (language === "ru"
-                ? `${reminders.length} напоминаний · ${calendarEvents.length} событий`
-                : `${reminders.length} reminders · ${calendarEvents.length} events`)}
+                ? (activeServerId ? `${reminders.length} напоминаний · ${calendarEvents.length} событий` : "Календарь, напоминания и идеи")
+                : (activeServerId ? `${reminders.length} reminders · ${calendarEvents.length} events` : "Calendar, reminders and ideas"))}
               {activeSection === "media" && (language === "ru" ? "Поиск, запросы и очередь загрузок" : "Search, requests and download queue")}
               {activeSection === "monitoring" && (language === "ru" ? "Контейнеры, сервисы и события" : "Containers, services and events")}
               {activeSection === "notifications" && (notificationFailures > 0
@@ -1832,7 +1838,7 @@ function MainApp() {
 
       {activeSection === "settings" && (
       <section className="glass-card hero-card">
-        <div className="hero-copy">
+        {(!activeServerId || isAddingServer) && <div className="hero-copy">
           <p className="eyebrow">
             <span className="status-dot" aria-hidden />
             {ui.devices.private}
@@ -1841,7 +1847,7 @@ function MainApp() {
           <p className="lead">
             {ui.devices.lead} {platform.secureStorage}.
           </p>
-        </div>
+        </div>}
 
         {profiles.length > 0 && (
           <section className="profile-switcher" aria-label="Paired servers">
@@ -2164,8 +2170,17 @@ function MainApp() {
 
       {activeSection === "overview" && (
         <section className="section-stack" aria-label="Overview">
+          {!activeServerId ? (
+            <article className="overview-start">
+              <span className="overview-start-mark"><Icon name="link" size={28} /></span>
+              <p className="eyebrow">HOMEPLACE LINK</p>
+              <h2>{language === "ru" ? "Ваши устройства — в одном месте" : "Your devices, in one place"}</h2>
+              <p>{language === "ru" ? "Подключите свой сервер HomePlace, чтобы видеть устройства, передачи, медиа и состояние сервисов." : "Connect your HomePlace server to see devices, transfers, media and service health."}</p>
+              <button type="button" className="primary-action" onClick={() => setActiveSection("settings")}>{language === "ru" ? "Подключить сервер" : "Connect a server"}<Icon name="link" size={17} /></button>
+            </article>
+          ) : <>
           <section className="metric-grid" aria-label="Connection summary">
-            <button type="button" className="glass-card metric-card" onClick={() => setActiveSection("devices")}>
+            <button type="button" className="glass-card metric-card" onClick={() => setActiveSection("settings")}>
               <span><Icon name="devices" size={21} /></span>
               <strong>{profiles.length}</strong>
               <small>{ui.overview.paired}</small>
@@ -2189,21 +2204,17 @@ function MainApp() {
             <button type="button" onClick={() => setActiveSection("transfers")}>
               <span><Icon name="transfer" size={18} /></span><b>{ui.overview.send}</b><small>{ui.overview.transfer}</small>
             </button>
-            <button type="button" onClick={() => setActiveSection("automations")}>
-              <span><Icon name="automation" size={18} /></span><b>{ui.overview.automation}</b><small>{ui.overview.actions}</small>
+            <button type="button" onClick={() => setActiveSection("monitoring")}>
+              <span><Icon name="monitoring" size={18} /></span><b>{ui.nav.monitoring}</b><small>{language === "ru" ? "Состояние сервера" : "Server health"}</small>
             </button>
           </section>
+          </>}
         </section>
       )}
 
       {activeSection === "clipboard" && (
         <section className="section-stack" aria-label="Clipboard">
           {clipboardSyncError && <p className="setting-error">{clipboardSyncError}</p>}
-          <section className="capability-grid">
-            <article className="glass-card"><b>{ui.clipboard.textOnly}</b><p>{ui.clipboard.textHint}</p></article>
-            <article className="glass-card"><b>{ui.clipboard.loop}</b><p>{ui.clipboard.loopHint}</p></article>
-            <article className="glass-card"><b>{ui.clipboard.private}</b><p>{ui.clipboard.privateHint}</p></article>
-          </section>
           <article className="glass-card transfer-list clipboard-history">
             <div className="section-heading">
               <div><p className="eyebrow">{ui.clipboard.eyebrow}</p><h3>{language === "ru" ? "История буфера" : "Clipboard history"}</h3></div>
@@ -2321,12 +2332,12 @@ function MainApp() {
 
       {activeSection === "automations" && (
         <section className="section-stack" aria-label="Automations">
-          <section className="automation-list">
-            <article className="glass-card automation-row"><span>{ui.automations.android}</span><b>{ui.automations.magnet}</b><i>→</i><span>{ui.automations.torrent}</span><small>{ui.automations.planned}</small></article>
-            <article className="glass-card automation-row"><span>{ui.automations.gaming}</span><b>{ui.automations.game}</b><i>→</i><span>{ui.automations.scene}</span><small>{ui.automations.planned}</small></article>
-            <article className="glass-card automation-row"><span>{ui.automations.macbook}</span><b>{ui.automations.home}</b><i>→</i><span>{ui.automations.wake}</span><small>{ui.automations.planned}</small></article>
-          </section>
-          <button type="button" className="primary-action" disabled>{ui.automations.create}</button>
+          <article className="overview-start roadmap-note">
+            <span className="overview-start-mark"><Icon name="automation" size={27} /></span>
+            <p className="eyebrow">HOMEPLACE LINK</p>
+            <h2>{language === "ru" ? "Правила между устройствами" : "Rules between devices"}</h2>
+            <p>{language === "ru" ? "Автоматизации ещё не доступны в Desktop. Здесь появятся сценарии для устройств и домашних сервисов, когда сервер начнёт ими управлять." : "Desktop automations are not available yet. Device and home-service rules will appear here when the server supports them."}</p>
+          </article>
         </section>
       )}
 
@@ -2339,7 +2350,7 @@ function MainApp() {
                   <p className="eyebrow">{ui.productivity.calendar}</p>
                   <h3>{monthLabel}</h3>
                 </div>
-                <div className="calendar-actions" aria-label="Calendar navigation preview">
+                <div className="calendar-actions" aria-label={language === "ru" ? "Навигация по календарю" : "Calendar navigation"}>
                   <button type="button" onClick={() => moveCalendarMonth(-1)} aria-label={ui.productivity.previousMonth}>‹</button>
                   <button type="button" onClick={showCurrentCalendarMonth}>{ui.productivity.today}</button>
                   <button type="button" onClick={() => moveCalendarMonth(1)} aria-label={ui.productivity.nextMonth}>›</button>
@@ -2559,11 +2570,6 @@ function MainApp() {
         </article>
 
         <IdeasBoard key={activeServerId ?? "unpaired"} language={language} activeServerId={activeServerId} onOpenConnections={() => setActiveSection("settings")} onMakeReminder={(value) => { setReminderTitle(value.slice(0, 200)); setReminderAt(defaultReminderTime()); setReminderRepeat("none"); setAddingReminder(true); }} openContextMenu={openContextMenu} />
-        <section className="productivity-features">
-            <article className="glass-card"><span><Icon name="link" size={17} /></span><div><b>{ui.productivity.continueTitle}</b><p>{ui.productivity.continueHint}</p></div><small>{ui.productivity.planned}</small></article>
-            <article className="glass-card"><span><Icon name="automation" size={17} /></span><div><b>{ui.productivity.contextTitle}</b><p>{ui.productivity.contextHint}</p></div><small>{ui.productivity.planned}</small></article>
-            <article className="glass-card"><span><Icon name="bell" size={17} /></span><div><b>{ui.productivity.smartTitle}</b><p>{ui.productivity.smartHint}</p></div><small>{ui.productivity.planned}</small></article>
-          </section>
         </section>
       )}
 
@@ -2581,7 +2587,6 @@ function MainApp() {
             <div className="section-heading"><div><p className="eyebrow">{ui.notifications.delivery}</p><h3>{ui.notifications.routes}</h3></div></div>
             <label className="settings-row"><span><b>{ui.notifications.desktop}</b><small>{ui.notifications.desktopHint}</small></span><input type="checkbox" checked={systemNotificationsEnabled} disabled={!systemNotificationsLoaded || systemNotificationsBusy || !activeServerId} onChange={(event) => void updateSystemNotifications(event.target.checked)} /></label>
             <div className="settings-row"><span><b>{ui.notifications.telegram}</b><small>{ui.notifications.telegramHint}</small></span><em>{ui.notifications.server}</em></div>
-            <div className="settings-row"><span><b>{ui.notifications.mobile}</b><small>{ui.notifications.mobileHint}</small></span><em>{ui.notifications.planned}</em></div>
             {systemNotificationsError && <p className="setting-error" role="alert">{systemNotificationsError}</p>}
           </article>
         </section>
@@ -2595,7 +2600,6 @@ function MainApp() {
                 <p className="eyebrow">{language === "ru" ? "Интерфейс" : "Interface"}</p>
                 <h3>{language === "ru" ? "Внешний вид" : "Appearance"}</h3>
               </div>
-              <span>{language === "ru" ? "Основа тем" : "Theme foundation"}</span>
             </div>
             <div className="theme-choices" role="group" aria-label={language === "ru" ? "Тема оформления" : "Color theme"}>
               <button type="button" className={theme === "light" ? "active" : undefined} onClick={() => setTheme("light")}>
@@ -2608,10 +2612,6 @@ function MainApp() {
                 <b>{language === "ru" ? "Тёмная" : "Dark"}</b>
                 <small>{language === "ru" ? "Глубокие спокойные поверхности" : "Deep, quiet surfaces"}</small>
               </button>
-              <div className="theme-future">
-                <Icon name="settings" size={18} />
-                <span><b>{language === "ru" ? "Свои темы — дальше" : "Custom themes next"}</b><small>{language === "ru" ? "Палитра уже построена на заменяемых токенах." : "The palette already uses replaceable design tokens."}</small></span>
-              </div>
             </div>
           </article>
           <article className="glass-card settings-panel">
@@ -2620,12 +2620,12 @@ function MainApp() {
             <label className="settings-row"><span><b>{ui.settings.clipboard}</b><small>{ui.settings.clipboardHint}</small></span><input type="checkbox" checked={clipboardSyncEnabled} disabled={!clipboardSyncLoaded || clipboardSyncBusy || !activeServerId} onChange={(event) => void updateClipboardSync(event.target.checked)} /></label>
             {(startupError || clipboardSyncError) && <p className="setting-error">{startupError ?? clipboardSyncError}</p>}
           </article>
-          <article className="glass-card settings-panel">
+          {activeServerId && <article className="glass-card settings-panel">
             <div className="section-heading"><div><p className="eyebrow">{ui.settings.connection}</p><h3>{server?.serverName ?? ui.settings.server}</h3></div><span className={lastHeartbeat ? "status-chip online" : "status-chip"}>{lastHeartbeat ? ui.settings.online : ui.settings.offline}</span></div>
             <div className="settings-row static"><span><b>{ui.settings.address}</b><small>{server?.address ?? ui.settings.notPaired}</small></span></div>
             <div className="settings-row static"><span><b>{ui.settings.storage}</b><small>{platform.secureStorage} · {ui.settings.storageHint}</small></span></div>
             <div className="settings-actions"><button type="button" onClick={() => void reconnectNow()} disabled={!activeServerId || reconnecting}>{ui.settings.reconnect}</button><button type="button" onClick={beginAddServer}>{ui.devices.addServer}</button></div>
-          </article>
+          </article>}
           <article className="glass-card settings-panel muted-panel">
             <div className="section-heading"><div><p className="eyebrow">{ui.settings.about}</p><h3>HomePlace Link Desktop</h3></div><span>v0.1.0</span></div>
             <p>Protocol v1 · {ui.settings.companion} {platform.label}</p>
@@ -2633,35 +2633,6 @@ function MainApp() {
         </section>
       )}
 
-      {activeSection === "overview" && (
-      <section className="details-grid">
-        <article className="glass-card detail-card">
-          <div className="detail-icon"><Icon name="devices" size={22} /></div>
-          <div>
-            <h3>{ui.details.platform}</h3>
-            <p>
-              {platform.platform === "macos"
-                ? ui.details.mac
-                : platform.platform === "windows"
-                  ? ui.details.windows
-                  : ui.details.linux}
-            </p>
-          </div>
-        </article>
-        <article className="glass-card detail-card">
-          <div className="detail-icon"><Icon name="link" size={22} /></div>
-          <div>
-            <h3>{ui.details.trust}</h3>
-            <p>{ui.details.trustHint}</p>
-          </div>
-        </article>
-      </section>
-      )}
-
-      <footer>
-        <span>{ui.details.protocol}</span>
-        <span>{ui.details.secrets}</span>
-      </footer>
       </div>
 
       {contextMenu && (

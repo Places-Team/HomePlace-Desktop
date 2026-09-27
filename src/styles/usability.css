@@ -1,0 +1,154 @@
+/* Shared desktop reading and interaction scale. Keep platform colors in design.css. */
+.app-content {
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+/* The layout must follow the rail even if a native hover arrives before React state. */
+.desktop-shell:has(> .app-sidebar:is(:hover, :focus-within)) {
+  grid-template-columns: var(--sidebar-open-width) minmax(0, 1fr);
+}
+.desktop-shell:has(> .app-sidebar:is(:hover, :focus-within)) > .app-sidebar {
+  width: var(--sidebar-open-width);
+}
+.desktop-shell:has(> .app-sidebar:is(:hover, :focus-within)) > .window-drag-region {
+  left: max(var(--sidebar-open-width), calc((100vw - 1480px) / 2 + var(--sidebar-open-width)));
+}
+
+.sidebar-nav { gap: 3px; }
+.sidebar-nav-group-label {
+  display: flex;
+  align-items: center;
+  height: 17px;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+  margin: 8px 8px 2px;
+  padding-top: 4px;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: color 160ms ease;
+}
+.sidebar-nav-group-label:first-child { border-top: 0; margin-top: 0; }
+.app-sidebar:not(:hover):not(:focus-within) .sidebar-nav-group-label { color: transparent; }
+.sidebar-nav button { min-height: 46px; font-size: 14px; }
+.sidebar-nav button:hover { transform: translateX(2px); }
+.sidebar-nav button:active { transform: translateX(2px) scale(.985); }
+.sidebar-nav .nav-icon { filter: none; }
+.sidebar-status b { font-size: 13px; }
+.sidebar-status small { font-size: 12px; }
+
+.titlebar-subtitle { font-size: 13px; line-height: 1.45; }
+.app-content .eyebrow { font-size: 11px; letter-spacing: .11em; }
+.section-heading h3 { font-size: clamp(19px, 2vw, 23px); line-height: 1.25; }
+.section-heading > span, .section-heading > button { font-size: 13px; }
+.titlebar-context-action { min-height: 38px; font-size: 13px; }
+.theme-toggle, .language-switcher button { min-width: 36px; min-height: 36px; }
+
+.overview-start {
+  position: relative;
+  display: flex;
+  min-height: min(520px, calc(100vh - 185px));
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: hidden;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line);
+  padding: clamp(32px, 6vw, 72px);
+  background: radial-gradient(circle at 88% 22%, var(--accent-soft), transparent 38%), var(--panel-soft);
+}
+.overview-start::after {
+  position: absolute;
+  right: -82px;
+  bottom: -160px;
+  width: 360px;
+  height: 360px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  content: "";
+  pointer-events: none;
+}
+.overview-start-mark {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px 18px 3px 3px;
+  margin-bottom: 26px;
+  color: var(--accent-strong);
+}
+.overview-start h2 {
+  max-width: 680px;
+  margin: 8px 0 14px;
+  font-size: clamp(34px, 5vw, 58px);
+  font-weight: 570;
+  line-height: 1.08;
+  letter-spacing: -.05em;
+  text-wrap: balance;
+}
+.overview-start > p:not(.eyebrow) { max-width: 56ch; margin: 0 0 30px; color: var(--text-soft); font-size: 17px; line-height: 1.55; }
+.overview-start .primary-action { display: inline-flex; align-items: center; gap: 14px; min-height: 46px; padding-inline: 18px; font-size: 15px; }
+.overview-start .primary-action svg { transition: transform 180ms ease; }
+.overview-start .primary-action:hover svg { transform: translateX(3px); }
+.overview-start.roadmap-note { min-height: 330px; }
+.overview-start.roadmap-note h2 { font-size: clamp(29px, 4vw, 44px); }
+
+.metric-card small, .quick-actions small, .settings-row small,
+.transfer-row small, .clipboard-history-row small, .reminder-item small,
+.agenda-item small, .theme-choices small { font-size: 12px; line-height: 1.5; }
+.quick-actions b, .settings-row b, .transfer-row b, .clipboard-history-row b,
+.reminder-item b, .agenda-item b, .automation-row b { font-size: 14px; line-height: 1.4; }
+.settings-row { min-height: 66px; }
+.settings-actions button, .transfer-row button, .reminder-form button,
+.connection-actions button, .section-heading button { min-height: 38px; font-size: 13px; }
+.empty-state b { font-size: 15px; }
+.empty-state p { font-size: 13px; }
+.calendar-grid button { font-size: 14px; }
+.calendar-actions button { min-width: 38px; min-height: 36px; font-size: 13px; }
+.calendar-source-row, .agenda-empty, .focus-card p { font-size: 13px; line-height: 1.5; }
+.agenda-empty b { font-size: 14px; }
+.reminder-column > b, .reminder-column-heading b { font-size: 12px; }
+.reminder-empty { font-size: 13px; line-height: 1.5; }
+
+.ideas-board .ideas-heading p, .ideas-board .ideas-legacy small,
+.ideas-board .ideas-item-body small { font-size: 13px; }
+.ideas-board .ideas-item-title b { font-size: 15px; }
+.ideas-board .ideas-item-note { font-size: 13px; }
+.ideas-board .ideas-sections button, .ideas-board .ideas-compose input,
+.ideas-board .ideas-compose textarea, .ideas-board .ideas-compose select,
+.ideas-board .ideas-search input { font-size: 14px; }
+.ideas-board .ideas-compose-actions button, .ideas-board .ideas-search button { min-height: 40px; font-size: 13px; }
+
+.server-workspace small { font-size: 12px; line-height: 1.5; }
+.server-workspace button, .server-workspace input { font-size: 14px; }
+.app-content button:disabled { opacity: .82; }
+html[data-theme="light"] .app-content button:disabled { color: var(--muted); opacity: .88; }
+
+@media (max-width: 1120px) {
+  .productivity-layout { grid-template-columns: minmax(0, 1fr); background: transparent; gap: 12px; }
+  .productivity-side { grid-template-columns: repeat(2, minmax(0, 1fr)); background: transparent; gap: 12px; }
+  .reminder-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reminder-column:nth-child(2) { border-right: 0; }
+  .reminder-column:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+}
+
+@media (max-width: 760px) {
+  .overview-start { min-height: 400px; padding: 30px 24px; }
+  .overview-start::after { opacity: .35; }
+  .overview-start > p:not(.eyebrow) { font-size: 15px; }
+  .app-content { padding-inline: 20px; }
+  .productivity-side, .reminder-grid { grid-template-columns: minmax(0, 1fr); }
+  .reminder-column { border-right: 0; border-bottom: 1px solid var(--line); }
+  .reminder-column:last-child { border-bottom: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-nav button, .overview-start .primary-action svg { transition: none; }
+  .sidebar-nav button:hover, .sidebar-nav button:active,
+  .overview-start .primary-action:hover svg { transform: none; }
+}
