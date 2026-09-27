@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FormEvent, Fragment, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { IdeasBoard } from "./components/IdeasBoard";
+import { NotificationHistory } from "./components/NotificationHistory";
 import { ServerWorkspace } from "./components/ServerWorkspace";
 import { TelegramStatus } from "./components/TelegramStatus";
 import { copy, type Language } from "./lib/i18n";
@@ -2605,6 +2606,7 @@ function MainApp() {
             <label className="settings-row"><span><b>{ui.notifications.desktop}</b><small>{ui.notifications.desktopHint}</small></span><input type="checkbox" checked={systemNotificationsEnabled} disabled={!systemNotificationsLoaded || systemNotificationsBusy || !activeServerId} onChange={(event) => void updateSystemNotifications(event.target.checked)} /></label>
             {systemNotificationsError && <p className="setting-error" role="alert">{systemNotificationsError}</p>}
           </article>
+          <NotificationHistory key={activeServerId ?? "unpaired"} language={language} activeServerId={activeServerId} />
           <TelegramStatus key={activeServerId ?? "unpaired"} activeServerId={activeServerId} language={language} />
         </section>
       )}

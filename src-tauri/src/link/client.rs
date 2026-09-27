@@ -149,6 +149,26 @@ struct AccountDevicesEnvelope {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NotificationHistoryItem {
+    id: String,
+    title: String,
+    body: String,
+    tag: Option<String>,
+    #[serde(default)]
+    urgent: bool,
+    created_at: String,
+    delivered_at: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationHistoryPage {
+    notifications: Vec<NotificationHistoryItem>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReminderSummary {
     id: String,
     title: String,
@@ -1030,6 +1050,123 @@ pub async fn list_account_devices() -> Result<Vec<AccountDevice>, String> {
         return Err("HomePlace returned an invalid account device list.".into());
     }
     Ok(envelope.devices)
+}
+
+fn validate_notification_history(page: &NotificationHistoryPage) -> Result<(), String> {
+    if page.notifications.len() > 50
+        || page
+            .next_cursor
+            .as_deref()
+            .is_some_and(|cursor| !valid_notification_cursor(cursor))
+        || page.notifications.iter().any(|item| {
+            !valid_notification_cursor(&item.id)
+                || item.title.trim().is_empty()
+                || item.title.len() > 480
+                || item.body.trim().is_empty()
+                || item.body.len() > 8000
+                || item.tag.as_deref().is_some_and(|tag| tag.len() > 480)
+                || OffsetDateTime::parse(&item.created_at, &Rfc3339).is_err()
+                || item
+                    .delivered_at
+                    .as_deref()
+                    .is_some_and(|date| OffsetDateTime::parse(date, &Rfc3339).is_err())
+        })
+    {
+        return Err("The HomePlace server returned an invalid notification history.".into());
+    }
+    Ok(())
+}
+
+fn valid_notification_cursor(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+#[cfg(test)]
+mod notification_history_tests {
+    use super::*;
+
+    #[test]
+    fn validates_notification_page_and_cursor() {
+        let item = NotificationHistoryItem {
+            id: "event_123".into(),
+            title: "Server alert".into(),
+            body: "The server is unavailable.".into(),
+            tag: Some("health".into()),
+            urgent: true,
+            created_at: "2026-09-27T10:00:00.000Z".into(),
+            delivered_at: Some("2026-09-27T10:00:01.000Z".into()),
+        };
+        let page = NotificationHistoryPage {
+            notifications: vec![item.clone()],
+            next_cursor: Some(item.id.clone()),
+        };
+        assert!(validate_notification_history(&page).is_ok());
+        assert!(!valid_notification_cursor("../event"));
+        assert!(
+            validate_notification_history(&NotificationHistoryPage {
+                notifications: vec![NotificationHistoryItem {
+                    created_at: "yesterday".into(),
+                    ..item
+                }],
+                next_cursor: None,
+            })
+            .is_err()
+        );
+    }
+}
+
+#[tauri::command]
+pub async fn list_notification_history(
+    cursor: Option<String>,
+) -> Result<NotificationHistoryPage, String> {
+    if cursor
+        .as_deref()
+        .is_some_and(|value| !valid_notification_cursor(value))
+    {
+        return Err("The notification history cursor is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let mut endpoint = base_url
+        .join("api/link/notifications")
+        .map_err(|_| "Could not create notification history API address.".to_string())?;
+    {
+        let mut query = endpoint.query_pairs_mut();
+        query.append_pair("limit", "50");
+        if let Some(cursor) = cursor.as_deref() {
+            query.append_pair("cursor", cursor);
+        }
+    }
+    let response = http_client()?
+        .get(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    match response.status().as_u16() {
+        401 => {
+            return Err("HomePlace rejected the device credential. Pair this device again.".into());
+        }
+        403 => return Err("Notification history is not available for this device.".into()),
+        404 if cursor.is_some() => {
+            return Err(
+                "This notification history page is no longer available. Refresh the list.".into(),
+            );
+        }
+        404 => return Err("Update the HomePlace server to enable notification history.".into()),
+        _ => ensure_success(&response, "notification history")?,
+    }
+    let page: NotificationHistoryPage = read_bounded_json_with_limit(response, 160 * 1024).await?;
+    validate_notification_history(&page)?;
+    Ok(page)
 }
 
 // The desktop workspace uses the same permission-gated, account-scoped API as Mobile.

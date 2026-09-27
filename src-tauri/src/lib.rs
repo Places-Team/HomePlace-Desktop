@@ -212,6 +212,7 @@ pub fn run() {
             link::client::remove_clipboard_history,
             link::client::list_share_targets,
             link::client::list_account_devices,
+            link::client::list_notification_history,
             link::client::link_mobile_overview,
             link::client::link_telegram_status,
             link::client::link_telegram_test,
