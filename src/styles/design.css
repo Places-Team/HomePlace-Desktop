@@ -43,6 +43,12 @@ html[data-theme="light"] {
   --line-strong: #afb2a5;
 }
 
+.app-content > footer {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 /* The navigation rail owns layout space while it expands. */
 .desktop-shell {
   --sidebar-open-width: 238px;

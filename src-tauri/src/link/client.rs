@@ -453,9 +453,11 @@ pub async fn start_pairing(
         public_key,
         capabilities: initial_capabilities(),
         permissions: vec![
+            "dashboard.read",
             "calendar.read",
             "calendar.manage",
             "reminder.manage",
+            "media.request",
             "share.relay",
         ],
     };
@@ -1030,6 +1032,176 @@ pub async fn list_account_devices() -> Result<Vec<AccountDevice>, String> {
         return Err("HomePlace returned an invalid account device list.".into());
     }
     Ok(envelope.devices)
+}
+
+// The desktop workspace uses the same permission-gated, account-scoped API as Mobile.
+// Credentials never cross the Tauri boundary; only bounded response data does.
+#[tauri::command]
+pub async fn link_mobile_overview() -> Result<serde_json::Value, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/mobile/overview")
+        .map_err(|_| "Could not create dashboard API address.".to_string())?;
+    let response = workspace_http_client(20)?
+        .get(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    mobile_api_status(&response, "dashboard.read")?;
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 512 * 1024).await?;
+    if !data
+        .get("monitoring")
+        .is_some_and(serde_json::Value::is_object)
+        || !data
+            .get("serverTime")
+            .is_some_and(serde_json::Value::is_string)
+        || !data
+            .get("requests")
+            .is_some_and(serde_json::Value::is_object)
+        || !data
+            .pointer("/requests/instances")
+            .is_some_and(serde_json::Value::is_array)
+        || !data
+            .pointer("/monitoring/services")
+            .is_some_and(serde_json::Value::is_array)
+        || !data
+            .pointer("/monitoring/containers/items")
+            .is_some_and(serde_json::Value::is_array)
+        || !data
+            .pointer("/monitoring/recent")
+            .is_some_and(serde_json::Value::is_array)
+    {
+        return Err("The HomePlace server returned an invalid dashboard response.".into());
+    }
+    Ok(serde_json::json!({
+        "serverTime": data.get("serverTime"),
+        "requests": data.get("requests"),
+        "monitoring": data.get("monitoring"),
+        "telegram": data.get("telegram"),
+    }))
+}
+
+#[tauri::command]
+pub async fn link_media_search(query: String) -> Result<serde_json::Value, String> {
+    let query = query.trim();
+    if query.chars().count() < 2
+        || query.chars().count() > 80
+        || query.chars().any(char::is_control)
+    {
+        return Err("Enter 2 to 80 characters to search media.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let mut endpoint = base_url
+        .join("api/link/mobile/requests/search")
+        .map_err(|_| "Could not create media search API address.".to_string())?;
+    endpoint.query_pairs_mut().append_pair("q", query);
+    let response = workspace_http_client(20)?
+        .get(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    mobile_api_status(&response, "media.request")?;
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 256 * 1024).await?;
+    if !data.get("results").is_some_and(serde_json::Value::is_array) {
+        return Err("The HomePlace server returned invalid media results.".into());
+    }
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn link_media_request(
+    instance_label: String,
+    external_id: u64,
+) -> Result<serde_json::Value, String> {
+    let label = instance_label.trim();
+    if label.is_empty()
+        || label.chars().count() > 120
+        || label.chars().any(char::is_control)
+        || external_id == 0
+    {
+        return Err("The media request is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/mobile/requests")
+        .map_err(|_| "Could not create media request API address.".to_string())?;
+    let response = workspace_http_client(30)?
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .json(&serde_json::json!({"instanceLabel": label, "externalId": external_id}))
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    mobile_api_status(&response, "media.request")?;
+    let success = response.status().is_success();
+    let data: serde_json::Value = read_bounded_json(response).await?;
+    if !success || data.get("ok") != Some(&serde_json::Value::Bool(true)) {
+        return Err(data
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("HomePlace could not add this title.")
+            .chars()
+            .take(240)
+            .collect());
+    }
+    Ok(data)
+}
+
+fn mobile_api_status(response: &Response, permission: &str) -> Result<(), String> {
+    match response.status().as_u16() {
+        401 => Err("HomePlace rejected this device credential. Pair the device again.".into()),
+        403 => Err(format!(
+            "{permission} is not approved for this device. Approve it when pairing again in HomePlace."
+        )),
+        404 => Err("This HomePlace server does not provide the Mobile Link API yet.".into()),
+        _ => {
+            if response.status().is_redirection() || response.status().is_server_error() {
+                Err(format!(
+                    "HomePlace returned HTTP {}.",
+                    response.status().as_u16()
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+#[tauri::command]
+pub fn open_server_page(app: AppHandle, page: String) -> Result<(), String> {
+    let path = match page.as_str() {
+        "media" => "media",
+        "monitoring" => "monitoring",
+        "containers" => "containers",
+        _ => return Err("The HomePlace destination is not supported.".into()),
+    };
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let target = base_url
+        .join(path)
+        .map_err(|_| "Could not create the HomePlace page address.".to_string())?;
+    app.opener()
+        .open_url(target.as_str(), None::<&str>)
+        .map_err(|_| "Could not open HomePlace in the browser.".to_string())
 }
 
 #[tauri::command]
@@ -2356,6 +2528,15 @@ fn http_client() -> Result<Client, String> {
         .map_err(|_| "Could not initialise the secure connection.".to_string())
 }
 
+fn workspace_http_client(timeout_seconds: u64) -> Result<Client, String> {
+    Client::builder()
+        .redirect(Policy::none())
+        .connect_timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(timeout_seconds))
+        .build()
+        .map_err(|_| "Could not initialise the server workspace connection.".to_string())
+}
+
 fn file_transfer_client() -> Result<Client, String> {
     Client::builder()
         .redirect(Policy::none())
@@ -2473,9 +2654,16 @@ fn ensure_success(response: &Response, operation: &str) -> Result<(), String> {
 }
 
 async fn read_bounded_json<T: DeserializeOwned>(response: Response) -> Result<T, String> {
+    read_bounded_json_with_limit(response, MAX_RESPONSE_BYTES).await
+}
+
+async fn read_bounded_json_with_limit<T: DeserializeOwned>(
+    response: Response,
+    limit: usize,
+) -> Result<T, String> {
     if response
         .content_length()
-        .is_some_and(|size| size > MAX_RESPONSE_BYTES as u64)
+        .is_some_and(|size| size > limit as u64)
     {
         return Err("The Link API response is larger than allowed.".into());
     }
@@ -2484,7 +2672,7 @@ async fn read_bounded_json<T: DeserializeOwned>(response: Response) -> Result<T,
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|_| "The Link API response could not be read.".to_string())?;
-        if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+        if body.len().saturating_add(chunk.len()) > limit {
             return Err("The Link API response is larger than allowed.".into());
         }
         body.extend_from_slice(&chunk);

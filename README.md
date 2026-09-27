@@ -34,6 +34,8 @@ chrome, materials and system integrations can vary by operating system.
 
 ## Status
 
+The Media and Monitoring views now use the server's account-scoped Link API instead of preview data. They show Radarr/Sonarr search and queues, qBittorrent activity, container and service status, and recent events. Adding a media title requires confirmation. New pairings request `dashboard.read` and `media.request`; previously paired devices must be approved again to use these views.
+
 Phase 0 is complete and Phase 1 is in progress. The repository contains a
 working Tauri 2 shell, platform-specific visual treatments, Link protocol
 validators, capability boundaries and macOS/Windows/Linux CI checks. The

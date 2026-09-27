@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FormEvent, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { Icon, type IconName } from "./components/Icon";
+import { ServerWorkspace } from "./components/ServerWorkspace";
 import { copy, type Language } from "./lib/i18n";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
 
@@ -211,14 +212,14 @@ const navigation: Array<{
   icon: IconName;
 }> = [
   { id: "overview", icon: "home" },
-  { id: "devices", icon: "devices" },
-  { id: "clipboard", icon: "clipboard" },
-  { id: "transfers", icon: "transfer" },
-  { id: "media", icon: "media" },
-  { id: "automations", icon: "automation" },
   { id: "productivity", icon: "calendar" },
+  { id: "media", icon: "media" },
   { id: "monitoring", icon: "monitoring" },
+  { id: "devices", icon: "devices" },
+  { id: "transfers", icon: "transfer" },
+  { id: "clipboard", icon: "clipboard" },
   { id: "notifications", icon: "bell" },
+  { id: "automations", icon: "automation" },
   { id: "settings", icon: "settings" },
 ];
 
@@ -1828,12 +1829,8 @@ function MainApp() {
               {activeSection === "productivity" && (language === "ru"
                 ? `${reminders.length} напоминаний · ${calendarEvents.length} событий`
                 : `${reminders.length} reminders · ${calendarEvents.length} events`)}
-              {activeSection === "media" && (language === "ru"
-                ? "Jellyfin · Radarr · Sonarr · qBittorrent"
-                : "Jellyfin · Radarr · Sonarr · qBittorrent")}
-              {activeSection === "monitoring" && (language === "ru"
-                ? `${accountDevices.filter((item) => item.online).length} устройств в сети · ${notificationFailures} ошибок`
-                : `${accountDevices.filter((item) => item.online).length} devices online · ${notificationFailures} issues`)}
+              {activeSection === "media" && (language === "ru" ? "Поиск, запросы и очередь загрузок" : "Search, requests and download queue")}
+              {activeSection === "monitoring" && (language === "ru" ? "Контейнеры, сервисы и события" : "Containers, services and events")}
               {activeSection === "notifications" && (notificationFailures > 0
                 ? (language === "ru" ? `${notificationFailures} требуют внимания` : `${notificationFailures} need attention`)
                 : (language === "ru" ? "Ошибок доставки нет" : "No delivery issues"))}
@@ -2687,75 +2684,9 @@ function MainApp() {
         </section>
       )}
 
-      {activeSection === "media" && (
-        <section className="section-stack media-page" aria-label="Media">
-          <section className="media-service-grid">
-            {[
-              { name: "Jellyfin", detail: language === "ru" ? "Сейчас играет, продолжить просмотр и управление" : "Now playing, continue watching, and playback controls", accent: "J" },
-              { name: "Radarr", detail: language === "ru" ? "Поиск фильмов и отправка запроса" : "Movie search and request handoff", accent: "R" },
-              { name: "Sonarr", detail: language === "ru" ? "Сериалы, сезоны и очередь загрузки" : "Shows, seasons, and download queue", accent: "S" },
-              { name: "qBittorrent", detail: language === "ru" ? "Magnet-ссылки, скорость и активные загрузки" : "Magnet links, speeds, and active downloads", accent: "qB" },
-            ].map((service) => (
-              <article className="glass-card media-service-card" key={service.name} onContextMenu={(event) => openContextMenu(event, [
-                { label: language === "ru" ? "Открыть настройки интеграции" : "Open integration settings", icon: "settings", run: () => setActiveSection("settings") },
-                { label: language === "ru" ? "Обновить состояние" : "Refresh status", icon: "refresh", run: () => void reconnectNow() },
-              ])}>
-                <span className="media-service-mark">{service.accent}</span>
-                <div><h3>{service.name}</h3><p>{service.detail}</p></div>
-                <em>{language === "ru" ? "Макет · API сервера" : "Preview · server API"}</em>
-              </article>
-            ))}
-          </section>
-          <div className="media-layout">
-            <article className="glass-card media-queue-card">
-              <div className="section-heading"><div><p className="eyebrow">{language === "ru" ? "ЕДИНАЯ ОЧЕРЕДЬ" : "UNIFIED QUEUE"}</p><h3>{language === "ru" ? "Продолжить и загрузить" : "Continue and download"}</h3></div><span>{language === "ru" ? "Макет" : "Preview"}</span></div>
-              <div className="media-placeholder-list">
-                <div><span><Icon name="media" size={16} /></span><b>{language === "ru" ? "Продолжить просмотр из Jellyfin" : "Continue watching from Jellyfin"}</b><small>{language === "ru" ? "Синхронизация позиции между устройствами" : "Sync playback position between devices"}</small></div>
-                <div><span><Icon name="transfer" size={16} /></span><b>{language === "ru" ? "Активные загрузки" : "Active downloads"}</b><small>{language === "ru" ? "Общий прогресс qBittorrent, Radarr и Sonarr" : "Combined qBittorrent, Radarr, and Sonarr progress"}</small></div>
-              </div>
-            </article>
-            <article className="glass-card media-search-card">
-              <div className="section-heading"><div><p className="eyebrow">{language === "ru" ? "ЗАПРОС" : "REQUEST"}</p><h3>{language === "ru" ? "Найти фильм или сериал" : "Find a movie or show"}</h3></div></div>
-              <div className="media-search-preview"><Icon name="media" size={18} /><span>{language === "ru" ? "Поиск через Radarr и Sonarr появится после подключения серверного API." : "Radarr and Sonarr search will appear after the server API is connected."}</span></div>
-            </article>
-          </div>
-        </section>
+      {(activeSection === "media" || activeSection === "monitoring") && (
+        <ServerWorkspace key={activeServerId ?? "unpaired"} kind={activeSection} language={language} activeServerId={activeServerId} onOpenConnections={() => setActiveSection("settings")} />
       )}
-
-      {activeSection === "monitoring" && (
-        <section className="section-stack monitoring-page" aria-label="Monitoring">
-          <section className="metric-grid monitoring-metrics">
-            <article className="glass-card metric-card"><span><Icon name="devices" size={21} /></span><strong>{accountDevices.filter((item) => item.online).length}/{accountDevices.length}</strong><small>{language === "ru" ? "Устройства в сети" : "Devices online"}</small></article>
-            <article className="glass-card metric-card"><span><Icon name="monitoring" size={21} /></span><strong>{lastHeartbeat ? (language === "ru" ? "Связь есть" : "Healthy") : "—"}</strong><small>{language === "ru" ? "Канал HomePlace" : "HomePlace channel"}</small></article>
-            <article className="glass-card metric-card"><span><Icon name="bell" size={21} /></span><strong>{notificationFailures}</strong><small>{language === "ru" ? "Требуют внимания" : "Need attention"}</small></article>
-          </section>
-          <div className="monitoring-layout">
-            <article className="glass-card monitoring-services">
-              <div className="section-heading"><div><p className="eyebrow">{language === "ru" ? "СОСТОЯНИЕ" : "HEALTH"}</p><h3>{language === "ru" ? "Сервисы и устройства" : "Services and devices"}</h3></div><span className={`status-chip${lastHeartbeat ? " online" : ""}`}>{lastHeartbeat ? (language === "ru" ? "В сети" : "Online") : (language === "ru" ? "Не в сети" : "Offline")}</span></div>
-              <div className="monitoring-service-list">
-                <div><span className={lastHeartbeat ? "online" : ""} /><b>HomePlace Link</b><small>{server?.serverName ?? ui.noServer}</small><em>{lastHeartbeat ? "OK" : "—"}</em></div>
-                <div><span /><b>Docker / Proxmox</b><small>{language === "ru" ? "Проверки из серверного дашборда" : "Checks from the server dashboard"}</small><em>{language === "ru" ? "Макет" : "Preview"}</em></div>
-                <div><span /><b>Home Assistant</b><small>{language === "ru" ? "Доступность и последние события" : "Availability and recent events"}</small><em>{language === "ru" ? "Макет" : "Preview"}</em></div>
-                <div><span /><b>Telegram</b><small>{language === "ru" ? "Доставка и состояние ботов" : "Delivery and bot availability"}</small><em>{notificationFailures > 0 ? "!" : "—"}</em></div>
-              </div>
-            </article>
-            <article className="glass-card roadmap-card">
-              <div className="section-heading"><div><p className="eyebrow">HOMEPLACE LINK</p><h3>{language === "ru" ? "Следующие возможности" : "Next capabilities"}</h3></div><span>{language === "ru" ? "План" : "Plan"}</span></div>
-              <div className="roadmap-list">
-                {[
-                  language === "ru" ? "Удалённые действия: блокировка, сон, запуск приложений" : "Remote actions: lock, sleep, and app launch",
-                  language === "ru" ? "Возобновляемая передача больших файлов" : "Resumable large-file transfers",
-                  language === "ru" ? "Продолжение работы на другом устройстве" : "Continue work on another device",
-                  language === "ru" ? "Подтверждение входа и действий с телефона" : "Phone approval for sign-in and sensitive actions",
-                  language === "ru" ? "Политики разрешений для каждой capability" : "Per-capability permission policies",
-                  language === "ru" ? "Подписанные обновления и безопасный откат" : "Signed updates and safe rollback",
-                ].map((item, index) => <div key={item}><span>{String(index + 1).padStart(2, "0")}</span><b>{item}</b><small>{language === "ru" ? "Запланировано" : "Planned"}</small></div>)}
-              </div>
-            </article>
-          </div>
-        </section>
-      )}
-
       {activeSection === "notifications" && (
         <section className="section-stack" aria-label="Notifications">
           <section className="metric-grid notification-metrics">

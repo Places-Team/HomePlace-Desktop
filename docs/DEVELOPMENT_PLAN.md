@@ -8,6 +8,18 @@ second dashboard. The server owns users, permissions, automation and the audit
 timeline; the desktop application owns local capability execution and explicit
 user consent.
 
+## Server-backed workspace
+
+Desktop reads the same account-scoped Link overview used by Mobile. Media shows Radarr/Sonarr search, explicit add confirmation, their queues, and qBittorrent activity. Monitoring shows real container, service, and recent-event summaries with source timestamps. Both views offer a verified link to the full web page for workflows not yet supported in Desktop. Pairing requests `dashboard.read` and `media.request` alongside existing permissions. Already-paired devices need fresh approval before these views work; the app never upgrades its own permissions silently.
+
+Next increments, in order:
+
+- Add server-side request records with durable status and actionable failure details. Radarr/Sonarr queues show active tasks but are not a complete request history.
+- Expose quality-profile and root-folder choices in an approved server API before promising them in Desktop. The current media request endpoint uses the first configured profile and folder.
+- Add monitor drill-down endpoints for container details, service history, and grouped-event diagnostics. Keep container control in the web dashboard until per-action permission and audit contracts exist.
+- Bring Telegram delivery status and supported test actions into Desktop after checking current server permissions. Home Assistant controls and automations remain previews pending stable Link contracts.
+- Validate Windows and Linux native builds and tray behavior on those operating systems; macOS checks cannot establish their parity.
+
 ## Phase 0 — contract and repository foundation
 
 - Scaffold Tauri 2, Rust, React, TypeScript and Vite.
