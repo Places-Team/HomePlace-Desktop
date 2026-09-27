@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FormEvent, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { Icon, type IconName } from "./components/Icon";
+import { IdeasBoard } from "./components/IdeasBoard";
 import { ServerWorkspace } from "./components/ServerWorkspace";
 import { copy, type Language } from "./lib/i18n";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
@@ -156,13 +157,6 @@ type Reminder = {
 
 type CompletedReminder = Reminder & {
   completedAt: string;
-};
-
-type Idea = {
-  id: string;
-  title: string;
-  category: string;
-  createdAt: string;
 };
 
 type ReminderBucket = "overdue" | "today" | "upcoming";
@@ -427,25 +421,6 @@ function MainApp() {
   const [expandedReminderIds, setExpandedReminderIds] = useState<Set<string>>(() => new Set());
   const [draggedReminderId, setDraggedReminderId] = useState<string | null>(null);
   const [reminderDropTarget, setReminderDropTarget] = useState<ReminderBucket | null>(null);
-  const [ideas, setIdeas] = useState<Idea[]>(() => {
-    try {
-      const stored = JSON.parse(window.localStorage.getItem("homeplace-ideas") ?? "[]") as Idea[];
-      return Array.isArray(stored) ? stored.filter((item) => item?.id && item?.title && item?.category) : [];
-    } catch {
-      return [];
-    }
-  });
-  const [ideaCategories, setIdeaCategories] = useState<string[]>(() => {
-    try {
-      const stored = JSON.parse(window.localStorage.getItem("homeplace-idea-categories") ?? "[]") as string[];
-      return Array.isArray(stored) && stored.length > 0 ? stored : ["Inbox", "Work", "Home", "Media", "Later"];
-    } catch {
-      return ["Inbox", "Work", "Home", "Media", "Later"];
-    }
-  });
-  const [ideaTitle, setIdeaTitle] = useState("");
-  const [ideaCategory, setIdeaCategory] = useState("Inbox");
-  const [ideaFilter, setIdeaFilter] = useState("all");
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [calendarStatus, setCalendarStatus] = useState<CalendarSummary["status"]>("not_connected");
   const [calendarLoaded, setCalendarLoaded] = useState(false);
@@ -1486,67 +1461,6 @@ function MainApp() {
       else next.add(id);
       return next;
     });
-  }
-
-  function persistIdeas(next: Idea[]) {
-    setIdeas(next);
-    window.localStorage.setItem("homeplace-ideas", JSON.stringify(next));
-  }
-
-  function addIdea(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const title = ideaTitle.trim();
-    if (!title) return;
-    persistIdeas([{ id: crypto.randomUUID(), title: title.slice(0, 500), category: ideaCategory, createdAt: new Date().toISOString() }, ...ideas]);
-    setIdeaTitle("");
-  }
-
-  function addIdeaCategory() {
-    const value = window.prompt(language === "ru" ? "Название категории" : "Category name")?.trim();
-    if (!value || ideaCategories.some((item) => item.toLowerCase() === value.toLowerCase())) return;
-    const next = [...ideaCategories, value.slice(0, 40)];
-    setIdeaCategories(next);
-    setIdeaCategory(value.slice(0, 40));
-    window.localStorage.setItem("homeplace-idea-categories", JSON.stringify(next));
-  }
-
-  function updateIdea(idea: Idea, changes: Partial<Idea>) {
-    persistIdeas(ideas.map((item) => item.id === idea.id ? { ...item, ...changes } : item));
-  }
-
-  function ideaContextActions(idea: Idea): ContextAction[] {
-    const categoryActions = ideaCategories
-      .filter((category) => category !== idea.category)
-      .slice(0, 5)
-      .map((category) => ({
-        label: `${language === "ru" ? "В категорию" : "Move to"}: ${category}`,
-        icon: "idea" as IconName,
-        run: () => updateIdea(idea, { category }),
-      }));
-    return [
-      {
-        label: contextLabels.edit,
-        icon: "edit",
-        run: () => {
-          const title = window.prompt(language === "ru" ? "Изменить идею" : "Edit idea", idea.title)?.trim();
-          if (title) updateIdea(idea, { title: title.slice(0, 500) });
-        },
-      },
-      { label: contextLabels.copy, icon: "clipboard", run: () => void navigator.clipboard.writeText(idea.title) },
-      {
-        label: language === "ru" ? "Сделать напоминанием" : "Turn into reminder",
-        icon: "calendar",
-        run: () => {
-          setReminderTitle(idea.title.slice(0, 200));
-          setReminderAt(defaultReminderTime());
-          setReminderRepeat("none");
-          setAddingReminder(true);
-        },
-      },
-      ...categoryActions,
-      { label: contextLabels.duplicate, icon: "plus", run: () => persistIdeas([{ ...idea, id: crypto.randomUUID(), createdAt: new Date().toISOString() }, ...ideas]) },
-      { label: contextLabels.remove, icon: "trash", danger: true, run: () => persistIdeas(ideas.filter((item) => item.id !== idea.id)) },
-    ];
   }
 
   async function duplicateReminder(reminder: Reminder) {
@@ -2644,38 +2558,7 @@ function MainApp() {
           </div>
         </article>
 
-        <article className="glass-card ideas-card">
-          <div className="section-heading">
-            <div><p className="eyebrow">{language === "ru" ? "БЫСТРЫЙ СБОР" : "QUICK CAPTURE"}</p><h3>{language === "ru" ? "Идеи" : "Ideas"}</h3></div>
-            <span>{ideas.length}</span>
-          </div>
-          <form className="idea-form" onSubmit={addIdea}>
-            <input value={ideaTitle} onChange={(event) => setIdeaTitle(event.target.value)} maxLength={500} placeholder={language === "ru" ? "Запишите идею, ссылку или следующий шаг…" : "Capture an idea, link, or next step…"} />
-            <select value={ideaCategory} onChange={(event) => setIdeaCategory(event.target.value)}>
-              {ideaCategories.map((category) => <option value={category} key={category}>{category}</option>)}
-            </select>
-            <button type="button" className="idea-category-add" onClick={addIdeaCategory} title={language === "ru" ? "Новая категория" : "New category"}>+</button>
-            <button type="submit" disabled={!ideaTitle.trim()}>{language === "ru" ? "Добавить" : "Add"}</button>
-          </form>
-          <div className="idea-filters" aria-label={language === "ru" ? "Категории идей" : "Idea categories"}>
-            <button type="button" className={ideaFilter === "all" ? "active" : undefined} onClick={() => setIdeaFilter("all")}>{language === "ru" ? "Все" : "All"} <small>{ideas.length}</small></button>
-            {ideaCategories.map((category) => (
-              <button type="button" className={ideaFilter === category ? "active" : undefined} onClick={() => setIdeaFilter(category)} key={category}>{category} <small>{ideas.filter((idea) => idea.category === category).length}</small></button>
-            ))}
-          </div>
-          <div className="idea-list">
-            {ideas.filter((idea) => ideaFilter === "all" || idea.category === ideaFilter).length === 0 ? (
-              <div className="idea-empty"><Icon name="idea" size={20} /><span><b>{language === "ru" ? "Здесь пока пусто" : "Nothing here yet"}</b><small>{language === "ru" ? "Добавьте идею — позже её можно превратить в напоминание." : "Capture an idea and turn it into a reminder later."}</small></span></div>
-            ) : ideas.filter((idea) => ideaFilter === "all" || idea.category === ideaFilter).map((idea) => (
-              <button type="button" className="idea-row" key={idea.id} onContextMenu={(event) => openContextMenu(event, ideaContextActions(idea))} onClick={(event) => openContextMenu(event, ideaContextActions(idea))}>
-                <span><Icon name="idea" size={15} /></span>
-                <span><b>{idea.title}</b><small>{idea.category} · {new Date(idea.createdAt).toLocaleDateString(language === "ru" ? "ru-RU" : "en-US")}</small></span>
-                <em>···</em>
-              </button>
-            ))}
-          </div>
-        </article>
-
+        <IdeasBoard key={activeServerId ?? "unpaired"} language={language} activeServerId={activeServerId} onOpenConnections={() => setActiveSection("settings")} onMakeReminder={(value) => { setReminderTitle(value.slice(0, 200)); setReminderAt(defaultReminderTime()); setReminderRepeat("none"); setAddingReminder(true); }} openContextMenu={openContextMenu} />
         <section className="productivity-features">
             <article className="glass-card"><span><Icon name="link" size={17} /></span><div><b>{ui.productivity.continueTitle}</b><p>{ui.productivity.continueHint}</p></div><small>{ui.productivity.planned}</small></article>
             <article className="glass-card"><span><Icon name="automation" size={17} /></span><div><b>{ui.productivity.contextTitle}</b><p>{ui.productivity.contextHint}</p></div><small>{ui.productivity.planned}</small></article>

@@ -216,6 +216,8 @@ pub fn run() {
             link::client::link_media_search,
             link::client::link_media_request,
             link::client::open_server_page,
+            link::client::list_ideas,
+            link::client::mutate_ideas,
             link::client::send_share_text,
             link::client::send_share_file,
             link::client::list_reminders,

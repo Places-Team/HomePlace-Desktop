@@ -457,6 +457,7 @@ pub async fn start_pairing(
             "calendar.read",
             "calendar.manage",
             "reminder.manage",
+            "ideas.manage",
             "media.request",
             "share.relay",
         ],
@@ -1202,6 +1203,133 @@ pub fn open_server_page(app: AppHandle, page: String) -> Result<(), String> {
     app.opener()
         .open_url(target.as_str(), None::<&str>)
         .map_err(|_| "Could not open HomePlace in the browser.".to_string())
+}
+
+#[tauri::command]
+pub async fn list_ideas(
+    cursor: Option<String>,
+    query: Option<String>,
+    category_id: Option<String>,
+    archived: bool,
+) -> Result<serde_json::Value, String> {
+    if cursor
+        .as_deref()
+        .is_some_and(|value| !safe_identifier(value))
+    {
+        return Err("The idea page cursor is invalid.".into());
+    }
+    if category_id
+        .as_deref()
+        .is_some_and(|value| !safe_identifier(value))
+    {
+        return Err("The idea category identifier is invalid.".into());
+    }
+    if query
+        .as_deref()
+        .is_some_and(|value| value.chars().count() > 100 || value.chars().any(char::is_control))
+    {
+        return Err("The idea search is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let mut endpoint = base_url
+        .join("api/link/ideas")
+        .map_err(|_| "Could not create ideas API address.".to_string())?;
+    if let Some(cursor) = cursor {
+        endpoint.query_pairs_mut().append_pair("cursor", &cursor);
+    }
+    if let Some(query) = query.filter(|value| !value.trim().is_empty()) {
+        endpoint.query_pairs_mut().append_pair("q", query.trim());
+    }
+    if let Some(category_id) = category_id {
+        endpoint
+            .query_pairs_mut()
+            .append_pair("categoryId", &category_id);
+    }
+    if archived {
+        endpoint.query_pairs_mut().append_pair("archived", "1");
+    }
+    let response = workspace_http_client(20)?
+        .get(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    mobile_api_status(&response, "ideas.manage")?;
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 512 * 1024).await?;
+    if !data
+        .get("categories")
+        .is_some_and(serde_json::Value::is_array)
+        || !data.get("ideas").is_some_and(serde_json::Value::is_array)
+    {
+        return Err("The HomePlace server returned invalid ideas.".into());
+    }
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn mutate_ideas(
+    action: String,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    if !matches!(
+        action.as_str(),
+        "createCategory"
+            | "renameCategory"
+            | "deleteCategory"
+            | "createIdea"
+            | "updateIdea"
+            | "deleteIdea"
+            | "import"
+    ) {
+        return Err("The idea action is not supported.".into());
+    }
+    let mut body = payload
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "The idea action requires a JSON object.".to_string())?;
+    body.insert("action".into(), serde_json::Value::String(action));
+    let body = serde_json::Value::Object(body);
+    if serde_json::to_vec(&body)
+        .map_err(|_| "Could not encode idea action.".to_string())?
+        .len()
+        > 32 * 1024
+    {
+        return Err("The idea action is too large.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/ideas")
+        .map_err(|_| "Could not create ideas API address.".to_string())?;
+    let response = workspace_http_client(30)?
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    mobile_api_status(&response, "ideas.manage")?;
+    let success = response.status().is_success();
+    let data: serde_json::Value = read_bounded_json(response).await?;
+    if !success {
+        return Err(data
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("HomePlace could not save this idea.")
+            .chars()
+            .take(240)
+            .collect());
+    }
+    Ok(data)
 }
 
 #[tauri::command]
