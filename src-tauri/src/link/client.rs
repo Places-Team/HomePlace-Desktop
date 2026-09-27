@@ -34,8 +34,11 @@ use super::{
 use crate::platform;
 
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
-const MAX_SHARE_FILE_BYTES: usize = 500 * 1024 * 1024;
-const FILE_TRANSFER_TIMEOUT_SECONDS: u64 = 30 * 60;
+const LEGACY_FILE_LIMIT_BYTES: u64 = 500 * 1024 * 1024;
+const MAX_SUPPORTED_FILE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+const MAX_EXCHANGE_TEXT_BYTES: usize = 16 * 1024;
+const EXCHANGE_LIFETIMES: [u32; 3] = [600, 3600, 86400];
+const FILE_TRANSFER_TIMEOUT_SECONDS: u64 = 12 * 60 * 60;
 const HEARTBEAT_EVENT: &str = "link-heartbeat";
 const HEALTHY_HEARTBEAT_SECONDS: u64 = 30;
 const MAX_RETRY_SECONDS: u64 = 5 * 60;
@@ -65,6 +68,7 @@ pub struct VerifiedServer {
     server_name: String,
     realtime: bool,
     reduced_security: bool,
+    max_file_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -166,6 +170,62 @@ pub struct NotificationHistoryItem {
 pub struct NotificationHistoryPage {
     notifications: Vec<NotificationHistoryItem>,
     next_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExchangeSummary {
+    token: String,
+    #[serde(default)]
+    url: String,
+    kind: String,
+    access: String,
+    filename: Option<String>,
+    size: Option<u64>,
+    delete_after_open: bool,
+    created_at: String,
+    expires_at: String,
+}
+
+#[derive(Deserialize)]
+struct ExchangeListEnvelope {
+    exchanges: Vec<ExchangeSummary>,
+}
+
+#[derive(Deserialize)]
+struct ExchangeEnvelope {
+    exchange: ExchangeSummary,
+}
+
+#[derive(Deserialize)]
+struct ExchangeRecipientEnvelope {
+    exchange: ExchangeRecipient,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExchangeRecipient {
+    kind: String,
+    access: String,
+    filename: Option<String>,
+    size: Option<u64>,
+    #[serde(rename = "deleteAfterOpen")]
+    _delete_after_open: bool,
+    expires_at: String,
+}
+
+#[derive(Deserialize)]
+struct ExchangeTextEnvelope {
+    text: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExchangeRetrieval {
+    kind: String,
+    text: Option<String>,
+    saved_path: Option<String>,
+    name: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -445,7 +505,24 @@ pub async fn verify_server(address: String) -> Result<VerifiedServer, String> {
         server_name: validated.server_name.to_owned(),
         realtime: validated.realtime,
         reduced_security,
+        max_file_bytes: info.limits.map(|limits| limits.max_file_bytes),
     })
+}
+
+#[tauri::command]
+pub async fn get_file_transfer_limit() -> Result<u64, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let verified = verify_server(profile.address.clone()).await?;
+    if verified.server_id != profile.server_id {
+        return Err("The Link API belongs to a different HomePlace server.".into());
+    }
+    match verified.max_file_bytes {
+        Some(limit) if (1..=MAX_SUPPORTED_FILE_BYTES).contains(&limit) => Ok(limit),
+        Some(_) => Err("The HomePlace server returned an invalid file limit.".into()),
+        None => Ok(LEGACY_FILE_LIMIT_BYTES),
+    }
 }
 
 #[tauri::command]
@@ -1186,6 +1263,502 @@ pub async fn list_notification_history(
     Ok(page)
 }
 
+fn valid_exchange_token(token: &str) -> bool {
+    token.len() == 22
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn validate_exchange_options(expires_in_seconds: u32, access: &str) -> Result<(), String> {
+    if !EXCHANGE_LIFETIMES.contains(&expires_in_seconds) || !matches!(access, "account" | "link") {
+        return Err("The exchange options are invalid.".into());
+    }
+    Ok(())
+}
+
+fn validate_exchange_summary(exchange: &ExchangeSummary) -> Result<(), String> {
+    if !valid_exchange_token(&exchange.token)
+        || !matches!(exchange.kind.as_str(), "text" | "file")
+        || !matches!(exchange.access.as_str(), "account" | "link")
+        || (exchange.kind == "file" && (exchange.filename.is_none() || exchange.size.is_none()))
+        || exchange
+            .filename
+            .as_deref()
+            .is_some_and(|name| !valid_exchange_filename(name))
+        || exchange
+            .size
+            .is_some_and(|size| size > MAX_SUPPORTED_FILE_BYTES)
+        || OffsetDateTime::parse(&exchange.created_at, &Rfc3339).is_err()
+        || OffsetDateTime::parse(&exchange.expires_at, &Rfc3339).is_err()
+    {
+        return Err("The HomePlace server returned an invalid exchange.".into());
+    }
+    Ok(())
+}
+
+fn valid_exchange_filename(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name.chars().count() <= 240
+        && !name
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '/' | '\\' | ':'))
+}
+
+fn exchange_api_status(response: &Response, action: &str) -> Result<(), String> {
+    match response.status().as_u16() {
+        401 => Err(
+            "Exchange access was denied. Check device pairing and the share.relay permission."
+                .into(),
+        ),
+        403 => Err("This device cannot create or open exchanges. Check Link permissions.".into()),
+        404 => Err("The exchange is unavailable or the HomePlace server needs an update.".into()),
+        413 => Err("The exchange exceeds the server size limit.".into()),
+        429 => Err("Too many exchange requests. Try again later.".into()),
+        _ => ensure_success(response, action),
+    }
+}
+
+fn exchange_share_url(base_url: &Url, token: &str) -> Result<String, String> {
+    if !valid_exchange_token(token) {
+        return Err("The exchange code is invalid.".into());
+    }
+    base_url
+        .join(&format!("x/{token}"))
+        .map(|url| url.to_string())
+        .map_err(|_| "Could not create the exchange URL.".to_string())
+}
+
+#[cfg(test)]
+mod exchange_tests {
+    use super::*;
+
+    #[test]
+    fn validates_exchange_codes_options_and_response() {
+        let token = "AbCdEf0123456789_-abcd";
+        assert!(valid_exchange_token(token));
+        assert!(!valid_exchange_token("../bad"));
+        assert!(validate_exchange_options(3600, "link").is_ok());
+        assert!(validate_exchange_options(900, "link").is_err());
+        assert!(validate_exchange_options(3600, "unknown").is_err());
+        let item: ExchangeSummary = serde_json::from_value(serde_json::json!({
+            "token": token,
+            "kind": "file",
+            "access": "account",
+            "filename": "archive.zip",
+            "size": 1024,
+            "deleteAfterOpen": true,
+            "createdAt": "2026-09-27T10:00:00.000Z",
+            "expiresAt": "2026-09-27T11:00:00.000Z"
+        }))
+        .unwrap();
+        assert!(validate_exchange_summary(&item).is_ok());
+        let base = Url::parse("https://home.example.net/").unwrap();
+        assert_eq!(
+            exchange_share_url(&base, token).unwrap(),
+            format!("https://home.example.net/x/{token}")
+        );
+        assert!(
+            validate_exchange_summary(&ExchangeSummary {
+                filename: Some("../bad".into()),
+                ..item
+            })
+            .is_err()
+        );
+    }
+}
+
+#[tauri::command]
+pub async fn list_exchanges() -> Result<Vec<ExchangeSummary>, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/exchange")
+        .map_err(|_| "Could not create the exchange API address.".to_string())?;
+    let response = workspace_http_client(20)?
+        .get(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    exchange_api_status(&response, "exchange list")?;
+    let mut envelope: ExchangeListEnvelope =
+        read_bounded_json_with_limit(response, 128 * 1024).await?;
+    if envelope.exchanges.len() > 100 {
+        return Err("The HomePlace server returned too many exchanges.".into());
+    }
+    for exchange in &mut envelope.exchanges {
+        validate_exchange_summary(exchange)?;
+        exchange.url = exchange_share_url(&base_url, &exchange.token)?;
+    }
+    Ok(envelope.exchanges)
+}
+
+#[tauri::command]
+pub async fn create_text_exchange(
+    text: String,
+    expires_in_seconds: u32,
+    delete_after_open: bool,
+    access: String,
+) -> Result<ExchangeSummary, String> {
+    validate_exchange_options(expires_in_seconds, &access)?;
+    if text.trim().is_empty() || text.len() > MAX_EXCHANGE_TEXT_BYTES {
+        return Err("Choose text between 1 byte and 16 KiB.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/exchange")
+        .map_err(|_| "Could not create the exchange API address.".to_string())?;
+    let response = workspace_http_client(30)?
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .json(&serde_json::json!({
+            "text": text,
+            "expiresInSeconds": expires_in_seconds,
+            "deleteAfterOpen": delete_after_open,
+            "access": access,
+        }))
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    exchange_api_status(&response, "text exchange")?;
+    let mut envelope: ExchangeEnvelope = read_bounded_json(response).await?;
+    validate_exchange_summary(&envelope.exchange)?;
+    envelope.exchange.url = exchange_share_url(&base_url, &envelope.exchange.token)?;
+    Ok(envelope.exchange)
+}
+
+#[tauri::command]
+pub async fn create_file_exchange(
+    app: AppHandle,
+    file_path: String,
+    transfer_id: String,
+    expires_in_seconds: u32,
+    delete_after_open: bool,
+    access: String,
+) -> Result<ExchangeSummary, String> {
+    validate_exchange_options(expires_in_seconds, &access)?;
+    if !safe_identifier(&transfer_id) {
+        return Err("The upload identifier is invalid.".into());
+    }
+    let path = PathBuf::from(file_path);
+    let metadata = fs::metadata(&path)
+        .map_err(|_| "The selected exchange file is unavailable.".to_string())?;
+    let max_file_bytes = get_file_transfer_limit().await?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max_file_bytes {
+        return Err(format!(
+            "Choose a file within the server limit of {max_file_bytes} bytes."
+        ));
+    }
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| {
+            !name.is_empty() && name.chars().count() <= 240 && !name.chars().any(char::is_control)
+        })
+        .ok_or_else(|| "The selected filename is invalid.".to_string())?
+        .to_owned();
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|_| "The selected exchange file could not be read.".to_string())?;
+    let total_bytes = metadata.len();
+    let progress_app = app.clone();
+    let progress_transfer_id = transfer_id.clone();
+    let progress_filename = filename.clone();
+    let progress_step = (total_bytes / 200).max(256 * 1024);
+    let mut transferred_bytes = 0_u64;
+    let mut last_emitted_bytes = 0_u64;
+    let _ = app.emit(
+        "link-file-transfer-progress",
+        FileTransferProgress {
+            transfer_id: transfer_id.clone(),
+            file_name: filename.clone(),
+            transferred_bytes: 0,
+            total_bytes,
+        },
+    );
+    let stream = ReaderStream::new(file).map(move |chunk| {
+        if let Ok(bytes) = &chunk {
+            transferred_bytes = transferred_bytes.saturating_add(bytes.len() as u64);
+            if transferred_bytes == total_bytes
+                || transferred_bytes.saturating_sub(last_emitted_bytes) >= progress_step
+            {
+                last_emitted_bytes = transferred_bytes;
+                let _ = progress_app.emit(
+                    "link-file-transfer-progress",
+                    FileTransferProgress {
+                        transfer_id: progress_transfer_id.clone(),
+                        file_name: progress_filename.clone(),
+                        transferred_bytes,
+                        total_bytes,
+                    },
+                );
+            }
+        }
+        chunk
+    });
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/exchange/file")
+        .map_err(|_| "Could not create the file exchange API address.".to_string())?;
+    let response = file_transfer_client()?
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/octet-stream")
+        .header("x-homeplace-size", total_bytes)
+        .header(
+            "x-homeplace-filename-base64",
+            STANDARD.encode(filename.as_bytes()),
+        )
+        .header("x-homeplace-expires", expires_in_seconds)
+        .header("x-homeplace-access", access)
+        .header(
+            "x-homeplace-delete-after-open",
+            delete_after_open.to_string(),
+        )
+        .header(reqwest::header::CONTENT_LENGTH, total_bytes)
+        .bearer_auth(credential.as_str())
+        .body(reqwest::Body::wrap_stream(stream))
+        .send()
+        .await
+        .map_err(|error| file_transfer_connection_error(&error))?;
+    exchange_api_status(&response, "file exchange")?;
+    let mut envelope: ExchangeEnvelope = read_bounded_json(response).await?;
+    validate_exchange_summary(&envelope.exchange)?;
+    envelope.exchange.url = exchange_share_url(&base_url, &envelope.exchange.token)?;
+    Ok(envelope.exchange)
+}
+
+#[tauri::command]
+pub async fn delete_exchange(token: String) -> Result<(), String> {
+    if !valid_exchange_token(&token) {
+        return Err("The exchange code is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join(&format!("api/exchange/{token}"))
+        .map_err(|_| "Could not create the exchange API address.".to_string())?;
+    let response = workspace_http_client(20)?
+        .delete(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    exchange_api_status(&response, "exchange deletion")
+}
+
+#[tauri::command]
+pub async fn retrieve_exchange(
+    app: AppHandle,
+    token: String,
+    transfer_id: String,
+) -> Result<Option<ExchangeRetrieval>, String> {
+    if !valid_exchange_token(&token) || !safe_identifier(&transfer_id) {
+        return Err("The exchange code is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let item_endpoint = base_url
+        .join(&format!("api/exchange/{token}"))
+        .map_err(|_| "Could not create the exchange API address.".to_string())?;
+    let response = workspace_http_client(20)?
+        .get(item_endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    exchange_api_status(&response, "exchange details")?;
+    let envelope: ExchangeRecipientEnvelope = read_bounded_json(response).await?;
+    let item = envelope.exchange;
+    if !matches!(item.kind.as_str(), "text" | "file")
+        || !matches!(item.access.as_str(), "account" | "link")
+        || OffsetDateTime::parse(&item.expires_at, &Rfc3339).is_err()
+    {
+        return Err("The HomePlace server returned an invalid exchange.".into());
+    }
+    if item.kind == "text" {
+        let endpoint = base_url
+            .join(&format!("api/exchange/{token}/open"))
+            .map_err(|_| "Could not create the text exchange address.".to_string())?;
+        let response = workspace_http_client(30)?
+            .post(endpoint)
+            .header("Accept", "application/json")
+            .bearer_auth(credential.as_str())
+            .send()
+            .await
+            .map_err(|error| connection_error(&error))?;
+        exchange_api_status(&response, "text exchange retrieval")?;
+        let content: ExchangeTextEnvelope =
+            read_bounded_json_with_limit(response, MAX_EXCHANGE_TEXT_BYTES * 6 + 1024).await?;
+        if content.text.is_empty() || content.text.len() > MAX_EXCHANGE_TEXT_BYTES {
+            return Err("The HomePlace server returned invalid exchange text.".into());
+        }
+        return Ok(Some(ExchangeRetrieval {
+            kind: "text".into(),
+            text: Some(content.text),
+            saved_path: None,
+            name: None,
+        }));
+    }
+
+    let filename = item
+        .filename
+        .filter(|name| valid_exchange_filename(name))
+        .ok_or_else(|| "The exchange filename is invalid.".to_string())?;
+    let expected_size =
+        item.size
+            .filter(|size| *size > 0 && *size <= MAX_SUPPORTED_FILE_BYTES)
+            .ok_or_else(|| "The exchange file size is invalid.".to_string())? as usize;
+    let Some(selected) = app
+        .dialog()
+        .file()
+        .set_file_name(&filename)
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+    let destination = selected
+        .as_path()
+        .ok_or_else(|| "Only local file destinations are supported.".to_string())?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "The selected file destination is invalid.".to_string())?;
+    let saved_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "The selected file name is invalid.".to_string())?;
+    if destination.exists() {
+        return Err("The selected file already exists. Choose a new filename.".into());
+    }
+    let endpoint = base_url
+        .join(&format!("api/exchange/{token}/file"))
+        .map_err(|_| "Could not create the file exchange address.".to_string())?;
+    let response = file_transfer_client()?
+        .get(endpoint)
+        .header("Accept", "application/octet-stream")
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
+        .map_err(|error| file_transfer_connection_error(&error))?;
+    exchange_api_status(&response, "file exchange retrieval")?;
+    if response.content_length() != Some(expected_size as u64) {
+        return Err("The exchange file size does not match its metadata.".into());
+    }
+    let expected_hash = response
+        .headers()
+        .get("x-homeplace-sha256")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or_else(|| "The exchange file integrity checksum is missing.".to_string())?
+        .to_ascii_lowercase();
+    let progress_step = (expected_size as u64 / 200).max(256 * 1024);
+    let mut last_emitted_bytes = 0_u64;
+    let _ = app.emit(
+        "link-file-transfer-progress",
+        FileTransferProgress {
+            transfer_id: transfer_id.clone(),
+            file_name: filename.clone(),
+            transferred_bytes: 0,
+            total_bytes: expected_size as u64,
+        },
+    );
+    let temporary = parent.join(format!(
+        ".{saved_name}.homeplace-{}.part",
+        uuid::Uuid::new_v4()
+    ));
+    let result = async {
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .await
+            .map_err(|_| "The temporary exchange file could not be created.".to_string())?;
+        let mut actual_size = 0usize;
+        let mut hasher = Sha256::new();
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.map_err(|_| "The exchange file could not be downloaded.".to_string())?;
+            actual_size = actual_size
+                .checked_add(chunk.len())
+                .filter(|size| *size <= expected_size)
+                .ok_or_else(|| "The exchange file exceeded its declared size.".to_string())?;
+            if actual_size as u64 == expected_size as u64
+                || (actual_size as u64).saturating_sub(last_emitted_bytes) >= progress_step
+            {
+                last_emitted_bytes = actual_size as u64;
+                let _ = app.emit(
+                    "link-file-transfer-progress",
+                    FileTransferProgress {
+                        transfer_id: transfer_id.clone(),
+                        file_name: filename.clone(),
+                        transferred_bytes: actual_size as u64,
+                        total_bytes: expected_size as u64,
+                    },
+                );
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk)
+                .await
+                .map_err(|_| "The exchange file could not be saved.".to_string())?;
+        }
+        file.flush()
+            .await
+            .map_err(|_| "The exchange file could not be saved.".to_string())?;
+        file.sync_all()
+            .await
+            .map_err(|_| "The exchange file could not be saved.".to_string())?;
+        drop(file);
+        let actual_hash = format!("{:x}", hasher.finalize());
+        if !file_integrity_matches(expected_size, &expected_hash, actual_size, &actual_hash) {
+            return Err("The exchange file failed its integrity check.".to_string());
+        }
+        tokio::fs::hard_link(&temporary, destination)
+            .await
+            .map_err(|_| {
+                "The verified exchange file could not be saved without replacing an existing file."
+                    .to_string()
+            })?;
+        let _ = tokio::fs::remove_file(&temporary).await;
+        Ok::<(), String>(())
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
+    result?;
+    Ok(Some(ExchangeRetrieval {
+        kind: "file".into(),
+        text: None,
+        saved_path: Some(destination.to_string_lossy().into_owned()),
+        name: Some(saved_name.to_owned()),
+    }))
+}
+
 // The desktop workspace uses the same permission-gated, account-scoped API as Mobile.
 // Credentials never cross the Tauri boundary; only bounded response data does.
 #[tauri::command]
@@ -1616,8 +2189,11 @@ pub async fn send_share_file(
     let path = PathBuf::from(file_path);
     let metadata =
         fs::metadata(&path).map_err(|_| "The dropped file is no longer available.".to_string())?;
-    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_SHARE_FILE_BYTES as u64 {
-        return Err("Choose a file between 1 byte and 500 MiB.".into());
+    let max_file_bytes = get_file_transfer_limit().await?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max_file_bytes {
+        return Err(format!(
+            "Choose a file within the server limit of {max_file_bytes} bytes."
+        ));
     }
     let filename = path
         .file_name()
@@ -1696,7 +2272,9 @@ pub async fn send_share_file(
             Err("Quick sharing is disabled for this device. Enable it in HomePlace Devices.".into())
         }
         404 => Err("The selected device is no longer available.".into()),
-        413 => Err("The selected file is larger than 500 MiB.".into()),
+        413 => {
+            Err("The selected file exceeds the current server limit. Refresh and try again.".into())
+        }
         _ => ensure_success(&response, "file share"),
     }
 }
@@ -2135,7 +2713,7 @@ fn valid_file_offer(payload: &serde_json::Value) -> Option<FileOffer> {
         return None;
     }
     let size = usize::try_from(payload.get("size")?.as_u64()?).ok()?;
-    if size == 0 || size > MAX_SHARE_FILE_BYTES {
+    if size == 0 || size as u64 > MAX_SUPPORTED_FILE_BYTES {
         return None;
     }
     let sha256 = payload.get("sha256")?.as_str()?;
@@ -2321,7 +2899,7 @@ async fn save_received_file(
                 chunk.map_err(|_| "The shared file could not be downloaded.".to_string())?;
             actual_size = actual_size
                 .checked_add(chunk.len())
-                .filter(|size| *size <= offer.size && *size <= MAX_SHARE_FILE_BYTES)
+                .filter(|size| *size <= offer.size && *size as u64 <= MAX_SUPPORTED_FILE_BYTES)
                 .ok_or_else(|| "The shared file is larger than the approved offer.".to_string())?;
             hasher.update(&chunk);
             file.write_all(&chunk)
@@ -3555,7 +4133,7 @@ mod tests {
             }),
             serde_json::json!({
                 "type": "file", "transferId": "transfer_123", "filename": "safe.bin",
-                "mimeType": "application/octet-stream", "size": MAX_SHARE_FILE_BYTES + 1,
+                "mimeType": "application/octet-stream", "size": MAX_SUPPORTED_FILE_BYTES + 1,
                 "sha256": "a".repeat(64), "sourceName": "Phone"
             }),
             serde_json::json!({

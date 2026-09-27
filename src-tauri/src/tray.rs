@@ -284,6 +284,45 @@ pub fn open_quick_share(app: AppHandle, text: Option<String>) -> Result<(), Stri
     Ok(())
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExchangeStage {
+    text: Option<String>,
+    file_path: Option<String>,
+}
+
+#[tauri::command]
+pub fn open_exchange_window(
+    app: AppHandle,
+    text: Option<String>,
+    file_path: Option<String>,
+) -> Result<(), String> {
+    if text.is_some() == file_path.is_some() {
+        return Err("Choose one text item or one file for a temporary exchange.".into());
+    }
+    if let Some(value) = text.as_deref()
+        && (value.trim().is_empty()
+            || value.len() > 16 * 1024
+            || value.chars().any(|character| {
+                character.is_control() && !matches!(character, '\n' | '\r' | '\t')
+            }))
+    {
+        return Err("The exchange text must be at most 16 KiB.".into());
+    }
+    if let Some(value) = file_path.as_deref() {
+        let path = std::path::Path::new(value);
+        let metadata = std::fs::metadata(path)
+            .map_err(|_| "The shared exchange file is unavailable.".to_string())?;
+        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 10 * 1024 * 1024 * 1024 {
+            return Err("Choose a file between 1 byte and 10 GiB. The server limit is checked before upload.".into());
+        }
+    }
+    show_main_window(&app);
+    app.emit("exchange-stage", ExchangeStage { text, file_path })
+        .map_err(|_| "Could not open temporary exchange in HomePlace.".to_string())?;
+    Ok(())
+}
+
 pub fn refresh_menu<R: Runtime>(app: &AppHandle<R>) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;

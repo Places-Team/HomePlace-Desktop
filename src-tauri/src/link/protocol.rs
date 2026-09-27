@@ -14,6 +14,13 @@ pub struct LinkInfo {
     pub protocol: ProtocolRange,
     pub server_time: String,
     pub features: LinkFeatures,
+    pub limits: Option<LinkLimits>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkLimits {
+    pub max_file_bytes: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,6 +109,7 @@ mod tests {
                 pairing: true,
                 realtime: false,
             },
+            limits: None,
         }
     }
 
@@ -113,6 +121,24 @@ mod tests {
         assert_eq!(validated.server_id, "e54f9bfa-2543-4be2-bc07-c1eb3d0947ee");
         assert_eq!(validated.server_name, "Home");
         assert!(!validated.realtime);
+    }
+
+    #[test]
+    fn reads_optional_server_file_limit() {
+        let mut value = serde_json::to_value(serde_json::json!({
+            "product": "HomePlace",
+            "server": {"id": "e54f9bfa-2543-4be2-bc07-c1eb3d0947ee", "name": "Home"},
+            "protocol": {"min": 1, "max": 1},
+            "serverTime": "2026-09-20T12:00:00Z",
+            "features": {"pairing": true, "realtime": false},
+            "limits": {"maxFileBytes": 10_737_418_240_u64}
+        }))
+        .unwrap();
+        let info: LinkInfo = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(info.limits.unwrap().max_file_bytes, 10_737_418_240);
+        value.as_object_mut().unwrap().remove("limits");
+        let legacy: LinkInfo = serde_json::from_value(value).unwrap();
+        assert!(legacy.limits.is_none());
     }
 
     #[test]

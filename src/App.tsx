@@ -8,8 +8,11 @@ import { IdeasBoard } from "./components/IdeasBoard";
 import { NotificationHistory } from "./components/NotificationHistory";
 import { ServerWorkspace } from "./components/ServerWorkspace";
 import { TelegramStatus } from "./components/TelegramStatus";
+import { TemporaryExchange, type ExchangeContent } from "./components/TemporaryExchange";
+import { exchangeExpiryOptions, exchangeGateway } from "./lib/exchangeGateway";
 import { copy, type Language } from "./lib/i18n";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
+import { fileLimitLabel, useFileTransferLimit } from "./lib/useFileTransferLimit";
 
 type ConnectionState =
   | "not-configured"
@@ -149,6 +152,8 @@ type PendingNativeShare = {
   files: string[];
   text?: string | null;
 };
+
+type ExchangeStage = { text?: string | null; filePath?: string | null };
 
 type Reminder = {
   id: string;
@@ -354,6 +359,8 @@ export function App() {
 
 function MainApp() {
   const [activeSection, setActiveSection] = useState<AppSection>("overview");
+  const [transferMode, setTransferMode] = useState<"devices" | "exchange">("devices");
+  const [exchangeDraft, setExchangeDraft] = useState<{ revision: number; serverId: string | null; content: ExchangeContent } | null>(null);
   const [sidebarPinned, setSidebarPinned] = useState(() => window.localStorage.getItem("homeplace-sidebar-pinned") === "1");
   const [sidebarExpanded, setSidebarExpanded] = useState(sidebarPinned);
   const [theme, setTheme] = useState<ThemeMode>(storedTheme);
@@ -590,6 +597,46 @@ function MainApp() {
       stopListening?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isTauriRuntime) return;
+    let cancelled = false;
+    let stopListening: (() => void) | undefined;
+    void listen<ExchangeStage>("exchange-stage", ({ payload }) => {
+      if (cancelled) return;
+      const content: ExchangeContent | null = payload.filePath
+        ? { kind: "file", path: payload.filePath, name: payload.filePath.split(/[\\/]/).pop() || payload.filePath }
+        : payload.text
+          ? { kind: "text", text: payload.text }
+          : null;
+      if (!content) return;
+      setExchangeDraft((previous) => ({ revision: (previous?.revision ?? 0) + 1, serverId: activeServerId, content }));
+      setTransferMode("exchange");
+      setActiveSection("transfers");
+    }).then((unlisten) => {
+      if (cancelled) unlisten(); else stopListening = unlisten;
+    });
+    return () => { cancelled = true; stopListening?.(); };
+  }, [activeServerId]);
+
+  useEffect(() => {
+    if (!isTauriRuntime || activeSection !== "transfers" || transferMode !== "exchange") return;
+    let cancelled = false;
+    let stopDrop: (() => void) | undefined;
+    void getCurrentWebview().onDragDropEvent((event) => {
+      if (cancelled || event.payload.type !== "drop") return;
+      const path = event.payload.paths[0];
+      if (!path) return;
+      setExchangeDraft((previous) => ({
+        revision: (previous?.revision ?? 0) + 1,
+        serverId: activeServerId,
+        content: { kind: "file", path, name: path.split(/[\\/]/).pop() || path },
+      }));
+    }).then((unlisten) => {
+      if (cancelled) unlisten(); else stopDrop = unlisten;
+    });
+    return () => { cancelled = true; stopDrop?.(); };
+  }, [activeSection, transferMode, activeServerId]);
 
   useEffect(() => {
     window.localStorage.setItem("homeplace-transfer-history", JSON.stringify(transferHistory.slice(0, 50)));
@@ -2372,7 +2419,23 @@ function MainApp() {
               ))}
             </article>
           )}
-          <ShareComposer language={language} />
+          <div className="transfer-mode-switch" role="tablist" aria-label={language === "ru" ? "Способ отправки" : "Sharing method"}>
+            <button type="button" role="tab" aria-selected={transferMode === "devices"} className={transferMode === "devices" ? "active" : undefined} onClick={() => setTransferMode("devices")}>{language === "ru" ? "На устройство" : "To a device"}</button>
+            <button type="button" role="tab" aria-selected={transferMode === "exchange"} className={transferMode === "exchange" ? "active" : undefined} onClick={() => setTransferMode("exchange")}>{language === "ru" ? "Временная ссылка" : "Temporary link"}</button>
+          </div>
+          {transferMode === "devices" ? <ShareComposer language={language} /> : activeServerId ? (
+            <TemporaryExchange
+              key={`${activeServerId}:${exchangeDraft && (exchangeDraft.serverId === activeServerId || exchangeDraft.serverId === null) ? exchangeDraft.revision : "fresh"}`}
+              language={language}
+              gateway={exchangeGateway}
+              expiryOptions={exchangeExpiryOptions(language)}
+              initialContent={exchangeDraft && (exchangeDraft.serverId === activeServerId || exchangeDraft.serverId === null) ? exchangeDraft.content : null}
+              onChooseFile={async () => {
+                const path = await invoke<string | null>("pick_exchange_file");
+                return path ? { path, name: path.split(/[\\/]/).pop() || path } : null;
+              }}
+            />
+          ) : <p className="setting-error">{language === "ru" ? "Подключите HomePlace в настройках, чтобы создавать временные ссылки." : "Connect HomePlace in Settings to create temporary links."}</p>}
         </section>
       )}
 
@@ -2773,6 +2836,7 @@ function MainApp() {
 }
 
 function ShareComposer({ language }: { language: Language }) {
+  const fileLimit = useFileTransferLimit();
   const [targets, setTargets] = useState<ShareTarget[]>([]);
   const [files, setFiles] = useState<string[]>([]);
   const [text, setText] = useState("");
@@ -2908,7 +2972,7 @@ function ShareComposer({ language }: { language: Language }) {
         <Icon name="transfer" size={24} />
         <span>
           <b>{dragging ? (language === "ru" ? "Отпустите файлы здесь" : "Drop files here") : (language === "ru" ? "Перетащите файлы или выберите их" : "Drop files or choose them")}</b>
-          <small>{language === "ru" ? "До 20 файлов, каждый размером до 500 МиБ" : "Up to 20 files, each up to 500 MiB"}</small>
+          <small>{language === "ru" ? `До 20 файлов, каждый до ${fileLimitLabel(fileLimit, language)}` : `Up to 20 files, each up to ${fileLimitLabel(fileLimit, language)}`}</small>
         </span>
       </button>
 
@@ -2955,6 +3019,7 @@ function ShareComposer({ language }: { language: Language }) {
 }
 
 function QuickShareWindow() {
+  const fileLimit = useFileTransferLimit();
   const [language] = useState<Language>(() => {
     const saved = window.localStorage.getItem("homeplace-language");
     return saved === "en" || saved === "ru" ? saved : navigator.language.toLowerCase().startsWith("ru") ? "ru" : "en";
@@ -3209,7 +3274,7 @@ function QuickShareWindow() {
           {payload?.kind === "files" ? (
             <div className="quick-share-payload">
               <Icon name="transfer" size={17} />
-              <span><b>{payload.label}</b><small>{language === "ru" ? `${payload.paths.length} файл(ов), до 500 МиБ каждый` : `${payload.paths.length} file(s), up to 500 MiB each`}</small></span>
+              <span><b>{payload.label}</b><small>{language === "ru" ? `${payload.paths.length} файл(ов), до ${fileLimitLabel(fileLimit, language)} каждый` : `${payload.paths.length} file(s), up to ${fileLimitLabel(fileLimit, language)} each`}</small></span>
               <button type="button" disabled={busy !== null} onClick={dismissShelf}>×</button>
             </div>
           ) : (
@@ -3222,6 +3287,17 @@ function QuickShareWindow() {
             />
           )}
           {transferProgress && <TransferProgressPanel progress={transferProgress} language={language} />}
+          <button type="button" className="quick-share-exchange" disabled={!payload || busy !== null || (payload.kind === "files" && payload.paths.length !== 1)} onClick={() => {
+            if (!payload) return;
+            void invoke("open_exchange_window", {
+              text: payload.kind === "files" ? null : payload.value,
+              filePath: payload.kind === "files" ? payload.paths[0] : null,
+            }).then(dismissShelf).catch((reason) => setError(errorMessage(reason)));
+          }}>
+            <Icon name="link" size={16} />
+            {language === "ru" ? "Создать временную ссылку" : "Create temporary link"}
+          </button>
+          {payload?.kind === "files" && payload.paths.length > 1 && <p className="temporary-exchange-note">{language === "ru" ? "Для временной ссылки выберите один файл." : "Choose one file for a temporary link."}</p>}
           <div className="quick-share-targets">
             {compatible.map((target) => (
               <button type="button" key={target.id} disabled={!payload || busy !== null} onClick={() => void send(target)}>

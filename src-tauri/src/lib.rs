@@ -109,6 +109,20 @@ async fn pick_share_files(app: tauri::AppHandle) -> Result<Vec<String>, String> 
         .collect()
 }
 
+#[tauri::command]
+fn pick_exchange_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    app.dialog()
+        .file()
+        .blocking_pick_file()
+        .map(|selected| {
+            selected
+                .into_path()
+                .map(|path| path.to_string_lossy().into_owned())
+                .map_err(|_| "The selected file must be local.".to_string())
+        })
+        .transpose()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -189,14 +203,17 @@ pub fn run() {
             start_window_drag,
             set_quick_share_expanded,
             pick_share_files,
+            pick_exchange_file,
             native::authenticate_sensitive_action,
             native::take_pending_share,
             tray::open_quick_share,
+            tray::open_exchange_window,
             tray::set_quick_share_pointer_inside,
             tray::set_quick_share_pinned,
             startup::startup_status,
             startup::set_startup_enabled,
             link::client::verify_server,
+            link::client::get_file_transfer_limit,
             link::client::start_pairing,
             link::client::poll_pairing,
             link::client::connection_profile,
@@ -213,6 +230,11 @@ pub fn run() {
             link::client::list_share_targets,
             link::client::list_account_devices,
             link::client::list_notification_history,
+            link::client::list_exchanges,
+            link::client::create_text_exchange,
+            link::client::create_file_exchange,
+            link::client::retrieve_exchange,
+            link::client::delete_exchange,
             link::client::link_mobile_overview,
             link::client::link_telegram_status,
             link::client::link_telegram_test,
