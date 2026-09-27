@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { type FormEvent, type MouseEvent, useCallback, useEffect, useState } from "react";
+import { type FormEvent, type MouseEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./Icon";
 import type { Language } from "../lib/i18n";
 import "../styles/ideas-board.css";
@@ -52,6 +52,7 @@ export function IdeasBoard({ language, activeServerId, onOpenConnections, onMake
   const [searchDraft, setSearchDraft] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [editing, setEditing] = useState<Idea | null>(null);
+  const [composeExpanded, setComposeExpanded] = useState(false);
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
   const [categoryId, setCategoryId] = useState("");
@@ -63,29 +64,34 @@ export function IdeasBoard({ language, activeServerId, onOpenConnections, onMake
   const [importPrompt, setImportPrompt] = useState(false);
   const [legacy] = useState(legacyData);
   const [legacyImported, setLegacyImported] = useState(() => !!activeServerId && window.localStorage.getItem(`homeplace-ideas-imported:${activeServerId}`) === "1");
+  const listVersion = useRef(0);
 
   const parameters = useCallback((cursor?: string) => ({ cursor: cursor ?? null, query: searchQuery || null, categoryId: filterId || null, archived }), [searchQuery, filterId, archived]);
   const refresh = useCallback(async () => {
     if (!activeServerId) return;
+    const version = ++listVersion.current;
     setLoading(true);
     try {
-      setPage(await invoke<IdeaPage>("list_ideas", parameters()));
+      const data = await invoke<IdeaPage>("list_ideas", parameters());
+      if (version !== listVersion.current) return;
+      setPage(data);
       setError(null);
     } catch (reason) {
-      setError(errorText(reason));
+      if (version === listVersion.current) setError(errorText(reason));
     } finally {
-      setLoading(false);
+      if (version === listVersion.current) setLoading(false);
     }
   }, [activeServerId, parameters]);
 
   useEffect(() => {
     if (!activeServerId) return;
     let cancelled = false;
+    const version = ++listVersion.current;
     invoke<IdeaPage>("list_ideas", parameters())
-      .then((data) => { if (!cancelled) { setPage(data); setError(null); } })
-      .catch((reason) => { if (!cancelled) setError(errorText(reason)); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .then((data) => { if (!cancelled && version === listVersion.current) { setPage(data); setError(null); } })
+      .catch((reason) => { if (!cancelled && version === listVersion.current) setError(errorText(reason)); })
+      .finally(() => { if (!cancelled && version === listVersion.current) setLoading(false); });
+    return () => { cancelled = true; listVersion.current += 1; };
   }, [activeServerId, parameters]);
 
   async function mutate<T = unknown>(action: string, payload: Record<string, unknown>): Promise<T | null> {
@@ -107,12 +113,14 @@ export function IdeasBoard({ language, activeServerId, onOpenConnections, onMake
 
   async function loadMore() {
     if (!page.nextCursor || busy) return;
+    const version = listVersion.current;
     setBusy(true);
     try {
       const next = await invoke<IdeaPage>("list_ideas", parameters(page.nextCursor));
+      if (version !== listVersion.current) return;
       setPage((current) => ({ categories: next.categories, ideas: [...current.ideas, ...next.ideas.filter((item) => !current.ideas.some((loaded) => loaded.id === item.id))], nextCursor: next.nextCursor }));
     } catch (reason) {
-      setError(errorText(reason));
+      if (version === listVersion.current) setError(errorText(reason));
     } finally {
       setBusy(false);
     }
@@ -120,6 +128,7 @@ export function IdeasBoard({ language, activeServerId, onOpenConnections, onMake
 
   function editIdea(idea: Idea) {
     setEditing(idea);
+    setComposeExpanded(true);
     setTitle(idea.title);
     setNote(idea.note);
     setCategoryId(idea.categoryId);
@@ -128,9 +137,10 @@ export function IdeasBoard({ language, activeServerId, onOpenConnections, onMake
 
   function clearEditor() {
     setEditing(null);
+    setComposeExpanded(false);
     setTitle("");
     setNote("");
-    setCategoryId("");
+    setCategoryId(archived ? "" : filterId);
   }
 
   async function saveIdea(event: FormEvent) {
@@ -146,7 +156,7 @@ export function IdeasBoard({ language, activeServerId, onOpenConnections, onMake
     const label = newCategory.trim();
     if (!label) return;
     const result = await mutate<{ category: IdeaCategory }>("createCategory", { name: label });
-    if (result) { setNewCategory(""); setCategoryId(result.category.id); setFilterId(result.category.id); setLoading(true); }
+    if (result) { setNewCategory(""); setCategoryId(result.category.id); setPage((current) => ({ ...current, ideas: [], nextCursor: null })); setFilterId(result.category.id); setLoading(true); }
   }
 
   async function importLocal() {
@@ -182,9 +192,11 @@ export function IdeasBoard({ language, activeServerId, onOpenConnections, onMake
       void refresh();
       return;
     }
+    listVersion.current += 1;
     setFilterId(nextId);
     setArchived(nextArchived);
     setCategoryId(nextArchived ? "" : nextId);
+    setPage((current) => ({ ...current, ideas: [], nextCursor: null }));
     setLoading(true);
   }
 
@@ -214,8 +226,8 @@ export function IdeasBoard({ language, activeServerId, onOpenConnections, onMake
       <aside className="ideas-sections" aria-label={ru ? "Разделы идей" : "Idea sections"}><div className="ideas-sections-title"><b>{ru ? "Разделы" : "Sections"}</b><small>{page.categories.length}</small></div><button type="button" className={!filterId && !archived ? "active" : ""} onClick={() => selectSection("", false)}>{ru ? "Все идеи" : "All ideas"}</button>{page.categories.map((category) => <div className="ideas-section-row" key={category.id}><button type="button" className={filterId === category.id && !archived ? "active" : ""} onClick={() => selectSection(category.id, false)}>{category.name}</button><button type="button" className="ideas-section-edit" aria-label={ru ? `Изменить раздел ${category.name}` : `Edit section ${category.name}`} onClick={() => { setRenamingId(category.id); setRenameValue(category.name); setDeleteCategoryId(null); }}><Icon name="edit" size={13} /></button></div>)}<button type="button" className={archived ? "active" : ""} onClick={() => selectSection("", true)}>{ru ? "Архив" : "Archive"}</button><form className="ideas-add-section" onSubmit={(event) => void addCategory(event)}><input aria-label={ru ? "Новый раздел" : "New section"} placeholder={ru ? "Новый раздел" : "New section"} value={newCategory} onChange={(event) => setNewCategory(event.target.value)} maxLength={40} /><button type="submit" disabled={!newCategory.trim() || busy} aria-label={ru ? "Добавить раздел" : "Add section"}>+</button></form>
         {renamingId && <form className="ideas-rename" onSubmit={async (event) => { event.preventDefault(); if (!renameValue.trim()) return; const saved = await mutate("renameCategory", { id: renamingId, name: renameValue.trim() }); if (saved) setRenamingId(null); }}><label>{ru ? "Название раздела" : "Section name"}<input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} maxLength={40} /></label><div><button type="button" onClick={() => setRenamingId(null)}>{ru ? "Отмена" : "Cancel"}</button><button type="submit" disabled={!renameValue.trim() || busy}>{ru ? "Сохранить" : "Save"}</button></div><button type="button" className="ideas-danger-link" onClick={() => setDeleteCategoryId(renamingId)}>{ru ? "Удалить раздел" : "Delete section"}</button>{deleteCategoryId === renamingId && <p>{ru ? "Идеи перейдут во «Входящие»." : "Ideas will move to Inbox."}<button type="button" disabled={busy} onClick={async () => { const deleted = await mutate("deleteCategory", { id: renamingId }); if (deleted) { setRenamingId(null); setDeleteCategoryId(null); setFilterId(""); } }}>{ru ? "Подтвердить" : "Confirm"}</button></p>}</form>}
       </aside>
-      <div className="ideas-main"><form className="ideas-compose" onSubmit={(event) => void saveIdea(event)}><div className="ideas-compose-head"><b>{editing ? (ru ? "Редактирование" : "Edit idea") : (ru ? "Новая идея" : "New idea")}</b>{editing && <button type="button" onClick={clearEditor}>{ru ? "Закрыть" : "Close"}</button>}</div><input aria-label={ru ? "Название идеи" : "Idea title"} placeholder={ru ? "Что хотите сохранить?" : "What do you want to keep?"} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={500} /><textarea aria-label={ru ? "Заметка к идее" : "Idea note"} placeholder={ru ? "Детали, ссылка или следующий шаг — необязательно" : "Details, a link, or the next step — optional"} value={note} onChange={(event) => setNote(event.target.value)} maxLength={2000} rows={editing ? 4 : 2} /><div className="ideas-compose-actions"><select aria-label={ru ? "Раздел" : "Section"} value={categoryId} onChange={(event) => setCategoryId(event.target.value)}><option value="">Inbox</option>{page.categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button type="submit" disabled={!title.trim() || busy}>{busy ? "…" : editing ? (ru ? "Сохранить" : "Save") : (ru ? "Добавить идею" : "Add idea")}</button></div></form>
-        <form className="ideas-search" onSubmit={(event) => { event.preventDefault(); const value = searchDraft.trim(); if (value === searchQuery) void refresh(); else { setSearchQuery(value); setLoading(true); } }}><input aria-label={ru ? "Поиск идей" : "Search ideas"} placeholder={ru ? "Поиск по идеям и заметкам" : "Search ideas and notes"} value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} maxLength={100} /><button type="submit">{ru ? "Найти" : "Search"}</button>{searchQuery && <button type="button" onClick={() => { setSearchDraft(""); setSearchQuery(""); setLoading(true); }}>{ru ? "Сбросить" : "Clear"}</button>}</form>
+      <div className="ideas-main" aria-busy={loading}><form className={`ideas-compose${composeExpanded ? " expanded" : ""}`} onSubmit={(event) => void saveIdea(event)}><div className="ideas-compose-head"><b>{editing ? (ru ? "Редактирование" : "Edit idea") : (ru ? "Новая идея" : "New idea")}</b>{composeExpanded && <button type="button" onClick={clearEditor}>{ru ? "Закрыть" : "Close"}</button>}</div><div className="ideas-compose-primary"><input aria-label={ru ? "Название идеи" : "Idea title"} placeholder={ru ? "Что хотите сохранить?" : "What do you want to keep?"} value={title} onFocus={() => setComposeExpanded(true)} onChange={(event) => setTitle(event.target.value)} maxLength={500} /><button type="submit" disabled={!title.trim() || busy}>{busy ? "…" : editing ? (ru ? "Сохранить" : "Save") : (ru ? "Добавить" : "Add")}</button></div>{composeExpanded && <><textarea aria-label={ru ? "Заметка к идее" : "Idea note"} placeholder={ru ? "Детали, ссылка или следующий шаг — необязательно" : "Details, a link, or the next step — optional"} value={note} onChange={(event) => setNote(event.target.value)} maxLength={2000} rows={editing ? 4 : 2} /><div className="ideas-compose-actions"><select aria-label={ru ? "Раздел" : "Section"} value={categoryId} onChange={(event) => setCategoryId(event.target.value)}><option value="">Inbox</option>{page.categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><small>{ru ? "Идея сохранится в вашем аккаунте" : "Saved to your account"}</small></div></>}</form>
+        <form className="ideas-search" onSubmit={(event) => { event.preventDefault(); const value = searchDraft.trim(); if (value === searchQuery) void refresh(); else { listVersion.current += 1; setPage((current) => ({ ...current, ideas: [], nextCursor: null })); setSearchQuery(value); setLoading(true); } }}><input aria-label={ru ? "Поиск идей" : "Search ideas"} placeholder={ru ? "Поиск по идеям и заметкам" : "Search ideas and notes"} value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} maxLength={100} /><button type="submit">{ru ? "Найти" : "Search"}</button>{searchQuery && <button type="button" onClick={() => { listVersion.current += 1; setSearchDraft(""); setPage((current) => ({ ...current, ideas: [], nextCursor: null })); setSearchQuery(""); setLoading(true); }}>{ru ? "Сбросить" : "Clear"}</button>}</form>
         {loading && page.ideas.length === 0 ? <p className="ideas-empty">{ru ? "Загружаем идеи…" : "Loading ideas…"}</p> : page.ideas.length === 0 ? <p className="ideas-empty">{archived ? (ru ? "В архиве пока пусто." : "The archive is empty.") : searchQuery ? (ru ? "По запросу ничего не найдено." : "No ideas match this search.") : (ru ? "Здесь пока пусто. Запишите первую идею выше." : "Nothing here yet. Capture your first idea above.")}</p> : <div className="ideas-list">{page.ideas.map((idea) => <div className={`ideas-item${editing?.id === idea.id ? " selected" : ""}`} key={idea.id} onContextMenu={(event) => openContextMenu(event, contextActions(idea))}><button type="button" className="ideas-item-body" onClick={() => editIdea(idea)}><span className="ideas-item-title">{idea.pinned && <Icon name="idea" size={15} />}<b>{idea.title}</b></span>{idea.note && <span className="ideas-item-note">{idea.note}</span>}<small>{categoriesById.get(idea.categoryId) ?? "Inbox"} · {new Date(idea.updatedAt).toLocaleDateString(ru ? "ru-RU" : "en-US")}</small></button><button type="button" className="ideas-item-menu" aria-label={ru ? `Действия с идеей ${idea.title}` : `Actions for ${idea.title}`} onClick={(event) => openContextMenu(event, contextActions(idea))}>···</button>{deleteIdeaId === idea.id && <div className="ideas-inline-delete"><span>{ru ? "Удалить эту идею?" : "Delete this idea?"}</span><button type="button" onClick={() => setDeleteIdeaId(null)}>{ru ? "Нет" : "No"}</button><button type="button" disabled={busy} onClick={async () => { const deleted = await mutate("deleteIdea", { id: idea.id }); if (deleted) { setDeleteIdeaId(null); if (editing?.id === idea.id) clearEditor(); } }}>{ru ? "Удалить" : "Delete"}</button></div>}</div>)}</div>}
         {page.nextCursor && <button type="button" className="ideas-load-more" disabled={busy} onClick={() => void loadMore()}>{ru ? "Показать ещё" : "Show more"}</button>}
       </div>
