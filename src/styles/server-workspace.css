@@ -73,3 +73,18 @@
 @media (max-width: 950px) { .workspace-media-grid { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { .workspace-toolbar { align-items: flex-start; flex-direction: column; } .workspace-toolbar-actions { justify-content: flex-start; } }
 @media (max-width: 610px) { .workspace-summary > div { padding: 17px 10px; } .workspace-summary > div:first-child { padding-left: 0; } .workspace-summary strong { font-size: 1.65rem; } .workspace-panel { padding: 16px; } .workspace-result { flex-wrap: wrap; } .workspace-result button { margin-left: 44px; } .workspace-row em { max-width: 30%; } .workspace-source-note { flex-wrap: wrap; } .workspace-source-note small { width: 100%; margin-left: 18px; } }
+
+.workspace-filterbar, .workspace-result-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.workspace-filterbar { padding: 13px 0 4px; }
+.workspace-filterbar input { flex: 1 1 220px; min-width: 0; min-height: 40px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 0 12px; background: var(--field); color: var(--text); }
+.workspace-filterbar button, .workspace-result-filters button { min-height: 38px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; background: transparent; color: var(--text-soft); font-size: 13px; font-weight: 620; }
+.workspace-filterbar button:hover, .workspace-result-filters button:hover { border-color: var(--line-strong); background: var(--panel-soft); }
+.workspace-filterbar button.selected, .workspace-result-filters button.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
+.workspace-filterbar .workspace-filter-clear { border-color: transparent; color: var(--muted); }
+.workspace-result-filters { border-bottom: 1px solid var(--line); margin-top: 14px; padding-bottom: 10px; }
+.workspace-result-filters small { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.workspace-results:empty { display: none; }
+.workspace-progress { height: 6px; }
+.workspace-queue-row { gap: 9px; }
+
+@media (max-width: 1120px) { .workspace-media-grid { grid-template-columns: minmax(0, 1fr); } }

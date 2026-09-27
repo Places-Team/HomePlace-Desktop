@@ -2129,40 +2129,6 @@ function MainApp() {
               </button>
             </div>
 
-            <label className="startup-setting">
-              <span>
-              <b>{ui.devices.startup}</b>
-              <small>{ui.devices.startupHint}</small>
-              </span>
-              <input
-                type="checkbox"
-                checked={startupEnabled}
-                disabled={!startupLoaded || startupBusy}
-                onChange={(event) => void updateStartup(event.target.checked)}
-              />
-            </label>
-            {startupError && (
-              <span className="setting-error" role="alert">
-                {startupError}
-              </span>
-            )}
-            <label className="startup-setting">
-              <span>
-              <b>{ui.devices.clipboard}</b>
-                <small>{ui.devices.clipboardHint}</small>
-              </span>
-              <input
-                type="checkbox"
-                checked={clipboardSyncEnabled}
-                disabled={!clipboardSyncLoaded || clipboardSyncBusy}
-                onChange={(event) => void updateClipboardSync(event.target.checked)}
-              />
-            </label>
-            {clipboardSyncError && (
-              <span className="setting-error" role="alert">
-                {clipboardSyncError}
-              </span>
-            )}
           </section>
         )}
       </section>
@@ -2620,16 +2586,10 @@ function MainApp() {
             <label className="settings-row"><span><b>{ui.settings.clipboard}</b><small>{ui.settings.clipboardHint}</small></span><input type="checkbox" checked={clipboardSyncEnabled} disabled={!clipboardSyncLoaded || clipboardSyncBusy || !activeServerId} onChange={(event) => void updateClipboardSync(event.target.checked)} /></label>
             {(startupError || clipboardSyncError) && <p className="setting-error">{startupError ?? clipboardSyncError}</p>}
           </article>
-          {activeServerId && <article className="glass-card settings-panel">
-            <div className="section-heading"><div><p className="eyebrow">{ui.settings.connection}</p><h3>{server?.serverName ?? ui.settings.server}</h3></div><span className={lastHeartbeat ? "status-chip online" : "status-chip"}>{lastHeartbeat ? ui.settings.online : ui.settings.offline}</span></div>
-            <div className="settings-row static"><span><b>{ui.settings.address}</b><small>{server?.address ?? ui.settings.notPaired}</small></span></div>
-            <div className="settings-row static"><span><b>{ui.settings.storage}</b><small>{platform.secureStorage} · {ui.settings.storageHint}</small></span></div>
-            <div className="settings-actions"><button type="button" onClick={() => void reconnectNow()} disabled={!activeServerId || reconnecting}>{ui.settings.reconnect}</button><button type="button" onClick={beginAddServer}>{ui.devices.addServer}</button></div>
-          </article>}
-          <article className="glass-card settings-panel muted-panel">
-            <div className="section-heading"><div><p className="eyebrow">{ui.settings.about}</p><h3>HomePlace Link Desktop</h3></div><span>v0.1.0</span></div>
+          <details className="glass-card settings-panel muted-panel settings-about">
+            <summary><span><small>{ui.settings.about}</small><b>HomePlace Link Desktop</b></span><span>v0.1.0</span></summary>
             <p>Protocol v1 · {ui.settings.companion} {platform.label}</p>
-          </article>
+          </details>
         </section>
       )}
 

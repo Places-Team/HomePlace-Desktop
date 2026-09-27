@@ -128,6 +128,14 @@
 .server-workspace button, .server-workspace input { font-size: 14px; }
 .app-content button:disabled { opacity: .82; }
 html[data-theme="light"] .app-content button:disabled { color: var(--muted); opacity: .88; }
+.settings-about summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; cursor: pointer; list-style: none; }
+.settings-about summary::-webkit-details-marker { display: none; }
+.settings-about summary > span:first-child { display: grid; gap: 3px; }
+.settings-about summary small { color: var(--muted); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+.settings-about summary b { color: var(--text); font-size: 15px; font-weight: 620; }
+.settings-about summary > span:last-child { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.settings-about summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
+.settings-about > p { margin: 16px 0 0; border-top: 1px solid var(--line); padding-top: 14px; color: var(--text-soft); font-size: 13px; }
 
 @media (max-width: 1120px) {
   .productivity-layout { grid-template-columns: minmax(0, 1fr); background: transparent; gap: 12px; }
