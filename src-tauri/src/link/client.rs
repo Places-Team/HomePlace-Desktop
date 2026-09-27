@@ -555,6 +555,7 @@ pub async fn start_pairing(
             "calendar.manage",
             "reminder.manage",
             "ideas.manage",
+            "plants.manage",
             "media.request",
             "telegram.send",
             "share.relay",
@@ -1810,6 +1811,53 @@ pub async fn link_mobile_overview() -> Result<serde_json::Value, String> {
         "monitoring": data.get("monitoring"),
         "telegram": data.get("telegram"),
     }))
+}
+
+#[tauri::command]
+pub async fn link_plants() -> Result<serde_json::Value, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url.join("api/link/plants")
+        .map_err(|_| "Could not create plants API address.".to_string())?;
+    let response = workspace_http_client(20)?.get(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str()).send().await
+        .map_err(|error| connection_error(&error))?;
+    mobile_api_status(&response, "plants.manage")?;
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 512 * 1024).await?;
+    if !data.get("plants").is_some_and(serde_json::Value::is_array) {
+        return Err("The HomePlace server returned invalid plants.".into());
+    }
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn link_change_plant(body: serde_json::Value) -> Result<serde_json::Value, String> {
+    if !body.is_object() || body.to_string().len() > 8 * 1024 {
+        return Err("The plant request is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url.join("api/link/plants")
+        .map_err(|_| "Could not create plants API address.".to_string())?;
+    let response = workspace_http_client(20)?.post(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str()).json(&body).send().await
+        .map_err(|error| connection_error(&error))?;
+    let conflict = response.status() == reqwest::StatusCode::CONFLICT;
+    if !conflict { mobile_api_status(&response, "plants.manage")?; }
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 64 * 1024).await?;
+    if conflict { return Ok(serde_json::json!({ "conflict": true, "plant": data.get("plant") })); }
+    if !data.get("plant").is_some_and(serde_json::Value::is_object) {
+        return Err("The HomePlace server returned an invalid plant.".into());
+    }
+    Ok(data)
 }
 
 #[tauri::command]

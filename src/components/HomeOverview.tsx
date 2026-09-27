@@ -26,6 +26,8 @@ type Overview = {
 };
 
 type Plant = { id: string; name: string; intervalDays: number; lastWateredAt: string };
+type SyncedPlant = { clientId: string; name: string; species: string; location: string; notes: string; intervalDays: number; lastWateredAt: string; revision: number; deletedAt: string | null };
+type PlantReply = { plant?: SyncedPlant; conflict?: boolean; existing?: boolean };
 
 function plantsKey(serverId: string) { return `homeplace-desktop-plants-v1:${serverId}`; }
 
@@ -36,13 +38,13 @@ function readPlants(serverId: string): Plant[] {
     return parsed.filter((item): item is Plant =>
       typeof item === "object" && item !== null &&
       typeof item.id === "string" && typeof item.name === "string" &&
-      Number.isInteger(item.intervalDays) && item.intervalDays >= 1 && item.intervalDays <= 90 &&
+      Number.isInteger(item.intervalDays) && item.intervalDays >= 1 && item.intervalDays <= 365 &&
       typeof item.lastWateredAt === "string" && Number.isFinite(Date.parse(item.lastWateredAt))
     ).slice(0, 50);
   } catch { return []; }
 }
 
-function daysUntilWater(plant: Plant, today: Date): number {
+function daysUntilWater(plant: Pick<Plant, "intervalDays" | "lastWateredAt">, today: Date): number {
   const last = new Date(plant.lastWateredAt);
   const due = Date.UTC(last.getFullYear(), last.getMonth(), last.getDate() + plant.intervalDays);
   return Math.round((due - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86_400_000);
@@ -62,7 +64,9 @@ export function HomeOverview({ serverId, language, onNavigate }: {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [plants, setPlants] = useState<Plant[]>(() => readPlants(serverId));
+  const [localPlants, setLocalPlants] = useState<Plant[]>(() => readPlants(serverId));
+  const [syncedPlants, setSyncedPlants] = useState<SyncedPlant[] | null>(null);
+  const [plantsBusy, setPlantsBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [plantName, setPlantName] = useState("");
   const [intervalDays, setIntervalDays] = useState(3);
@@ -91,10 +95,32 @@ export function HomeOverview({ serverId, language, onNavigate }: {
     return () => { requestVersion.current += 1; window.clearTimeout(start); window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
   }, [refresh]);
 
+  const refreshPlants = useCallback(async () => {
+    try {
+      const data = await invoke<{ plants: SyncedPlant[] }>("link_plants");
+      if (!Array.isArray(data.plants)) throw new Error("Invalid plant list");
+      setSyncedPlants(data.plants);
+      setPlantsError(null);
+    } catch (reason) {
+      setPlantsError(typeof reason === "string" ? reason : String(reason));
+    }
+  }, []);
+
+  useEffect(() => {
+    const start = window.setTimeout(() => void refreshPlants(), 0);
+    const onFocus = () => { if (document.visibilityState === "visible") void refreshPlants(); };
+    const timer = window.setInterval(onFocus, 60_000);
+    window.addEventListener("focus", onFocus);
+    return () => { window.clearTimeout(start); window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
+  }, [refreshPlants]);
+
+  const plants = syncedPlants === null ? localPlants : syncedPlants.filter((item) => !item.deletedAt);
+  const unimported = syncedPlants === null ? [] : localPlants.filter((item) => !syncedPlants.some((remote) => remote.clientId === item.id));
+
   function savePlants(next: Plant[]): boolean {
     try {
       window.localStorage.setItem(plantsKey(serverId), JSON.stringify(next));
-      setPlants(next);
+      setLocalPlants(next);
       setPlantsError(null);
       return true;
     } catch {
@@ -103,15 +129,54 @@ export function HomeOverview({ serverId, language, onNavigate }: {
     }
   }
 
-  function addPlant(event: FormEvent) {
-    event.preventDefault();
-    const name = plantName.trim();
-    if (!name || !Number.isInteger(intervalDays) || intervalDays < 1 || intervalDays > 90) return;
-    if (savePlants([...plants, { id: crypto.randomUUID(), name: name.slice(0, 80), intervalDays, lastWateredAt: new Date().toISOString() }])) setPlantName("");
+  async function changePlant(body: Record<string, unknown>) {
+    setPlantsBusy(true);
+    try {
+      const reply = await invoke<PlantReply>("link_change_plant", { body });
+      if (reply.conflict) {
+        await refreshPlants();
+        setPlantsError(ru ? "Растение изменилось на другом устройстве. Список обновлён." : "This plant changed on another device. The list has been refreshed.");
+        return false;
+      }
+      await refreshPlants();
+      return true;
+    } catch (reason) {
+      setPlantsError(typeof reason === "string" ? reason : String(reason));
+      return false;
+    } finally { setPlantsBusy(false); }
   }
 
-  function removePlant(plant: Plant) {
-    if (savePlants(plants.filter((item) => item.id !== plant.id))) setLastDeletedPlant(plant);
+  async function importLocalPlants() {
+    setPlantsBusy(true);
+    let failed = 0;
+    try {
+      for (const plant of unimported) {
+        try {
+          await invoke<PlantReply>("link_change_plant", { body: {
+            action: "create", clientId: plant.id, name: plant.name, species: "", location: "", notes: "",
+            intervalDays: plant.intervalDays, lastWateredAt: plant.lastWateredAt,
+          } });
+        } catch { failed += 1; }
+      }
+      await refreshPlants();
+      if (failed) setPlantsError(ru ? `Не удалось перенести ${failed} растений; локальные копии сохранены.` : `Could not import ${failed} plants; local copies remain saved.`);
+    } finally { setPlantsBusy(false); }
+  }
+
+  async function addPlant(event: FormEvent) {
+    event.preventDefault();
+    const name = plantName.trim();
+    if (!name || !Number.isInteger(intervalDays) || intervalDays < 1 || intervalDays > 365) return;
+    if (syncedPlants === null) {
+      if (savePlants([...localPlants, { id: crypto.randomUUID(), name: name.slice(0, 80), intervalDays, lastWateredAt: new Date().toISOString() }])) setPlantName("");
+      return;
+    }
+    if (await changePlant({ action: "create", clientId: crypto.randomUUID(), name: name.slice(0, 80), species: "", location: "", notes: "", intervalDays, lastWateredAt: new Date().toISOString() })) setPlantName("");
+  }
+
+  async function removePlant(plant: Plant | SyncedPlant) {
+    if ("clientId" in plant) { await changePlant({ action: "delete", clientId: plant.clientId, revision: plant.revision }); return; }
+    if (savePlants(localPlants.filter((item) => item.id !== plant.id))) setLastDeletedPlant(plant);
   }
 
   const queue = overview?.requests.instances.flatMap((instance) =>
@@ -155,13 +220,14 @@ export function HomeOverview({ serverId, language, onNavigate }: {
 
       <section className="home-overview-plants">
         <div className="home-overview-section-head"><span><Icon name="plant" size={20} /></span><div><h3>{ru ? "Растения" : "Plants"}</h3><p>{duePlants ? (ru ? `${duePlants} пора полить` : `${duePlants} need water`) : (ru ? "План полива" : "Watering plan")}</p></div></div>
-        <p className="home-overview-local">{ru ? "Пока хранится только на этом компьютере; список телефона не синхронизирован." : "Stored on this computer for now; the phone list is not synced."}</p>
+        <p className="home-overview-local">{syncedPlants === null ? (ru ? "Локальный список. Для синхронизации обновите сервер и разрешите plants.manage при подключении." : "Local list. Update the server and approve plants.manage to sync.") : (ru ? "Список синхронизируется с вашим аккаунтом HomePlace." : "Synced with your HomePlace account.")}</p>
+        {unimported.length > 0 && <button type="button" className="home-overview-link" disabled={plantsBusy} onClick={() => void importLocalPlants()}>{ru ? `Перенести локальные растения (${unimported.length})` : `Import local plants (${unimported.length})`}</button>}
         {plants.length > 0 ? <div className="home-overview-plant-list">{[...plants].sort((a, b) => daysUntilWater(a, today) - daysUntilWater(b, today)).map((plant) => {
           const days = daysUntilWater(plant, today);
-          return <div className="home-overview-plant" key={plant.id}><span><b>{plant.name}</b><small>{days < 0 ? (ru ? `Просрочено на ${-days} дн.` : `${-days} days overdue`) : days === 0 ? (ru ? "Полить сегодня" : "Water today") : (ru ? `Через ${days} дн.` : `In ${days} days`)}</small></span><button type="button" onClick={() => savePlants(plants.map((item) => item.id === plant.id ? { ...item, lastWateredAt: new Date().toISOString() } : item))}>{ru ? "Полито" : "Watered"}</button><button type="button" className="home-overview-remove" onClick={() => removePlant(plant)} aria-label={`${ru ? "Удалить" : "Remove"} ${plant.name}`}><Icon name="trash" size={15} /></button></div>;
+          return <div className="home-overview-plant" key={"clientId" in plant ? plant.clientId : plant.id}><span><b>{plant.name}</b><small>{days < 0 ? (ru ? `Просрочено на ${-days} дн.` : `${-days} days overdue`) : days === 0 ? (ru ? "Полить сегодня" : "Water today") : (ru ? `Через ${days} дн.` : `In ${days} days`)}</small></span><button type="button" disabled={plantsBusy} onClick={() => { if ("clientId" in plant) void changePlant({ action: "update", clientId: plant.clientId, revision: plant.revision, name: plant.name, species: plant.species, location: plant.location, notes: plant.notes, intervalDays: plant.intervalDays, lastWateredAt: new Date().toISOString() }); else savePlants(localPlants.map((item) => item.id === plant.id ? { ...item, lastWateredAt: new Date().toISOString() } : item)); }}>{ru ? "Полито" : "Watered"}</button><button type="button" className="home-overview-remove" disabled={plantsBusy} onClick={() => void removePlant(plant)} aria-label={`${ru ? "Удалить" : "Remove"} ${plant.name}`}><Icon name="trash" size={15} /></button></div>;
         })}</div> : <p className="home-overview-empty">{ru ? "Добавьте растение и интервал полива." : "Add a plant and its watering interval."}</p>}
-        {lastDeletedPlant && <p className="home-overview-undo" role="status">{ru ? `«${lastDeletedPlant.name}» удалено` : `${lastDeletedPlant.name} removed`} <button type="button" onClick={() => { if (savePlants([...plants, lastDeletedPlant])) setLastDeletedPlant(null); }}>{ru ? "Вернуть" : "Undo"}</button></p>}
-        <form className="home-overview-plant-form" onSubmit={addPlant}><input aria-label={ru ? "Название растения" : "Plant name"} placeholder={ru ? "Название растения" : "Plant name"} value={plantName} onChange={(event) => setPlantName(event.target.value)} maxLength={80} required /><label>{ru ? "Каждые" : "Every"}<input type="number" min={1} max={90} value={intervalDays} onChange={(event) => setIntervalDays(Number(event.target.value))} />{ru ? "дн." : "days"}</label><button type="submit" disabled={!plantName.trim() || plants.length >= 50}><Icon name="plus" size={16} />{ru ? "Добавить" : "Add"}</button></form>
+        {syncedPlants === null && lastDeletedPlant && <p className="home-overview-undo" role="status">{ru ? `«${lastDeletedPlant.name}» удалено` : `${lastDeletedPlant.name} removed`} <button type="button" onClick={() => { if (savePlants([...localPlants, lastDeletedPlant])) setLastDeletedPlant(null); }}>{ru ? "Вернуть" : "Undo"}</button></p>}
+        <form className="home-overview-plant-form" onSubmit={(event) => void addPlant(event)}><input aria-label={ru ? "Название растения" : "Plant name"} placeholder={ru ? "Название растения" : "Plant name"} value={plantName} onChange={(event) => setPlantName(event.target.value)} maxLength={80} required /><label>{ru ? "Каждые" : "Every"}<input type="number" min={1} max={365} value={intervalDays} onChange={(event) => setIntervalDays(Number(event.target.value))} />{ru ? "дн." : "days"}</label><button type="submit" disabled={plantsBusy || !plantName.trim() || plants.length >= (syncedPlants === null ? 50 : 500)}><Icon name="plus" size={16} />{ru ? "Добавить" : "Add"}</button></form>
         {plantsError && <p className="home-overview-error" role="alert">{plantsError}</p>}
       </section>
     </div>

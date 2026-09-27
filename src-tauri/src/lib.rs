@@ -236,6 +236,8 @@ pub fn run() {
             link::client::retrieve_exchange,
             link::client::delete_exchange,
             link::client::link_mobile_overview,
+            link::client::link_plants,
+            link::client::link_change_plant,
             link::client::link_telegram_status,
             link::client::link_telegram_test,
             link::client::link_media_search,
