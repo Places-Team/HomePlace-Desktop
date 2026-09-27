@@ -69,10 +69,10 @@ export function IdeasBoard({ language, activeServerId, onOpenConnections, onMake
   const listVersion = useRef(0);
 
   const parameters = useCallback((cursor?: string) => ({ cursor: cursor ?? null, query: searchQuery || null, categoryId: filterId || null, archived, completed: archived ? null : completedOnly }), [searchQuery, filterId, archived, completedOnly]);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (quiet = false) => {
     if (!activeServerId) return;
     const version = ++listVersion.current;
-    setLoading(true);
+    if (!quiet) setLoading(true);
     try {
       const data = await invoke<IdeaPage>("list_ideas", parameters());
       if (version !== listVersion.current) return;
@@ -84,6 +84,19 @@ export function IdeasBoard({ language, activeServerId, onOpenConnections, onMake
       if (version === listVersion.current) setLoading(false);
     }
   }, [activeServerId, parameters]);
+
+  useEffect(() => {
+    if (!activeServerId || busy || editing) return;
+    const update = () => {
+      if (document.visibilityState === "visible") void refresh(true);
+    };
+    const timer = window.setInterval(update, 30_000);
+    window.addEventListener("focus", update);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", update);
+    };
+  }, [activeServerId, busy, editing, refresh]);
 
   useEffect(() => {
     if (!activeServerId) return;
