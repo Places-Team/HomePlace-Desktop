@@ -213,6 +213,8 @@ pub fn run() {
             link::client::list_share_targets,
             link::client::list_account_devices,
             link::client::link_mobile_overview,
+            link::client::link_telegram_status,
+            link::client::link_telegram_test,
             link::client::link_media_search,
             link::client::link_media_request,
             link::client::open_server_page,

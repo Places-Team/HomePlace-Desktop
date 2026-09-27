@@ -12,7 +12,7 @@ type ArrInstance = {
   queueCount: number;
   warnings: number;
   queue: QueueItem[];
-  upcoming: Array<{ title: string; sub?: string }>;
+  upcoming: Array<{ title: string; sub?: string; at: number }>;
 };
 type Service = { id: string; title: string; status: string; latencyMs?: number | null; checkedAt?: string | null };
 type Container = { id: string; name: string; image?: string; state?: string; status?: string; hostLabel?: string; health?: string };
@@ -164,6 +164,11 @@ export function ServerWorkspace({ kind, language, activeServerId, onOpenConnecti
   const requests = overview?.requests;
   const instances = requests?.instances ?? [];
   const queue = instances.flatMap((instance) => (instance.queue ?? []).map((item) => ({ ...item, instance: instance.label })));
+  const upcoming = instances
+    .flatMap((instance) => (instance.upcoming ?? []).map((item) => ({ ...item, instance: instance.label })))
+    .filter((item) => Number.isFinite(item.at) && !Number.isNaN(new Date(item.at).getTime()) && item.title)
+    .sort((a, b) => a.at - b.at)
+    .slice(0, 12);
   const tabs = [
     { id: "containers" as const, label: ru ? "Контейнеры" : "Containers", count: monitoring?.containers?.total ?? 0 },
     { id: "services" as const, label: ru ? "Сервисы" : "Services", count: monitoring?.total ?? 0 },
@@ -217,6 +222,7 @@ export function ServerWorkspace({ kind, language, activeServerId, onOpenConnecti
           <div className="workspace-results">{filteredResults.map((item) => <div className="workspace-result" key={`${item.instanceLabel}:${item.externalId}`}><span className="workspace-result-mark">{item.kind.toLowerCase().includes("sonarr") ? "S" : "R"}</span><div><b>{item.title}</b><small>{[item.year, item.instanceLabel].filter(Boolean).join(" · ")}</small>{item.overview && <p>{item.overview}</p>}</div><button type="button" disabled={item.inLibrary || requesting} onClick={() => setConfirm(item)}>{item.inLibrary ? (ru ? "В библиотеке" : "In library") : (ru ? "Добавить" : "Add")}</button></div>)}</div>
         </section>
         <section className="workspace-panel"><div className="workspace-panel-heading"><h2>{ru ? "Запросы и загрузки" : "Requests and downloads"}</h2><small>{ru ? "Очередь Radarr / Sonarr" : "Radarr / Sonarr queue"}</small></div>{!overview ? <p className="workspace-empty">{ru ? "Состояние очереди пока недоступно." : "Queue status is unavailable."}</p> : queue.length ? <div className="workspace-list">{queue.map((item, index) => <div className="workspace-queue-row" key={`${item.instance}:${item.title}:${index}`}><div><b>{item.title}</b><small>{item.instance} · {item.status}</small></div><span>{Math.round(Math.max(0, Math.min(100, item.progress || 0)))}%</span><div className="workspace-progress"><i style={{ width: `${Math.max(0, Math.min(100, item.progress || 0))}%` }} /></div></div>)}</div> : <p className="workspace-empty">{ru ? "Активных задач нет. Добавленные напрямую в Radarr/Sonarr задачи появятся здесь." : "No active tasks. Items added directly in Radarr/Sonarr appear here too."}</p>}
+          {upcoming.length > 0 && <><div className="workspace-panel-heading workspace-subheading"><h3>{ru ? "Скоро" : "Upcoming"}</h3><small>{ru ? "Календарь Radarr / Sonarr" : "Radarr / Sonarr calendar"}</small></div><div className="workspace-list">{upcoming.map((item) => <div className="workspace-row" key={`${item.instance}:${item.title}:${item.at}`}><div><b>{item.title}</b><small>{[item.instance, item.sub].filter(Boolean).join(" · ")}</small></div><em>{stamp(new Date(item.at).toISOString(), language)}</em></div>)}</div></>}
           {instances.length > 0 && <div className="workspace-instances">{instances.map((item) => <div key={item.label}><b>{item.label}</b><span>{item.warnings > 0 ? `${item.warnings} ${ru ? "предупреждений" : "warnings"}` : item.upcoming?.length ? `${item.upcoming.length} ${ru ? "предстоящих" : "upcoming"}` : (ru ? "Нет предупреждений" : "No warnings")}</span></div>)}</div>}
         </section>
       </div>

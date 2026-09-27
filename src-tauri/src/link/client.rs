@@ -458,6 +458,7 @@ pub async fn start_pairing(
             "reminder.manage",
             "ideas.manage",
             "media.request",
+            "telegram.send",
             "share.relay",
         ],
     };
@@ -1082,6 +1083,75 @@ pub async fn link_mobile_overview() -> Result<serde_json::Value, String> {
         "monitoring": data.get("monitoring"),
         "telegram": data.get("telegram"),
     }))
+}
+
+#[tauri::command]
+pub async fn link_telegram_status() -> Result<serde_json::Value, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/mobile/telegram")
+        .map_err(|_| "Could not create Telegram API address.".to_string())?;
+    let response = workspace_http_client(12)?
+        .get(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    if response.status().as_u16() == 405 {
+        return Err("This HomePlace server does not support Telegram status yet.".into());
+    }
+    mobile_api_status(&response, "dashboard.read")?;
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 4096).await?;
+    if !data
+        .get("connected")
+        .is_some_and(serde_json::Value::is_boolean)
+        || !data
+            .get("enabled")
+            .is_some_and(serde_json::Value::is_boolean)
+        || !data
+            .get("canTest")
+            .is_some_and(serde_json::Value::is_boolean)
+    {
+        return Err("The HomePlace server returned an invalid Telegram status.".into());
+    }
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn link_telegram_test() -> Result<(), String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/mobile/telegram")
+        .map_err(|_| "Could not create Telegram API address.".to_string())?;
+    let response = workspace_http_client(20)?
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str())
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    if response.status().as_u16() == 429 {
+        return Err("Too many Telegram tests. Wait a minute and try again.".into());
+    }
+    if response.status().as_u16() == 409 {
+        return Err("Telegram is not enabled on the HomePlace server.".into());
+    }
+    mobile_api_status(&response, "telegram.send")?;
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 4096).await?;
+    if data.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Err("HomePlace could not deliver the Telegram test message.".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]

@@ -6,6 +6,7 @@ import { FormEvent, Fragment, type MouseEvent as ReactMouseEvent, useCallback, u
 import { Icon, type IconName } from "./components/Icon";
 import { IdeasBoard } from "./components/IdeasBoard";
 import { ServerWorkspace } from "./components/ServerWorkspace";
+import { TelegramStatus } from "./components/TelegramStatus";
 import { copy, type Language } from "./lib/i18n";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
 
@@ -2568,9 +2569,9 @@ function MainApp() {
           <article className="glass-card settings-panel">
             <div className="section-heading"><div><p className="eyebrow">{ui.notifications.delivery}</p><h3>{ui.notifications.routes}</h3></div></div>
             <label className="settings-row"><span><b>{ui.notifications.desktop}</b><small>{ui.notifications.desktopHint}</small></span><input type="checkbox" checked={systemNotificationsEnabled} disabled={!systemNotificationsLoaded || systemNotificationsBusy || !activeServerId} onChange={(event) => void updateSystemNotifications(event.target.checked)} /></label>
-            <div className="settings-row"><span><b>{ui.notifications.telegram}</b><small>{ui.notifications.telegramHint}</small></span><em>{ui.notifications.server}</em></div>
             {systemNotificationsError && <p className="setting-error" role="alert">{systemNotificationsError}</p>}
           </article>
+          <TelegramStatus key={activeServerId ?? "unpaired"} activeServerId={activeServerId} language={language} />
         </section>
       )}
 

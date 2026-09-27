@@ -17,7 +17,14 @@ Next increments, in order:
 - Add server-side request records with durable status and actionable failure details. Radarr/Sonarr queues show active tasks but are not a complete request history.
 - Expose quality-profile and root-folder choices in an approved server API before promising them in Desktop. The current media request endpoint uses the first configured profile and folder.
 - Add monitor drill-down endpoints for container details, service history, and grouped-event diagnostics. Keep container control in the web dashboard until per-action permission and audit contracts exist.
-- Bring Telegram delivery status and supported test actions into Desktop after checking current server permissions. Home Assistant controls and automations remain previews pending stable Link contracts.
+- Telegram configuration status and explicit delivery tests use the same approved Link scope as Mobile. Existing Desktop pairings need fresh approval for `telegram.send`; Home Assistant controls and automations remain previews pending stable Link contracts.
+
+## Mobile and Desktop parity boundaries
+
+- Calendar, reminders, account ideas, media requests, monitoring, device sharing, and Telegram tests use server-owned Link contracts rather than separate client databases. Desktop now shows upcoming Radarr/Sonarr items from the shared overview.
+- Mobile plant records and photos are local to a phone profile. They cannot appear on Desktop or another phone until the server defines account-scoped plant records, image storage, and an explicit migration path.
+- Android clipboard reads remain foreground-only. iOS Share Extension receiving and Windows/Linux native share targets require platform-specific implementation and testing; a shared UI cannot grant those operating-system capabilities.
+- Home Assistant control and cross-device automations need typed Link actions, per-action permissions, and an audit trail before either client presents them as working controls.
 - Validate Windows and Linux native builds and tray behavior on those operating systems; macOS checks cannot establish their parity.
 
 ## Phase 0 — contract and repository foundation

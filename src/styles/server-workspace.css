@@ -5,6 +5,7 @@
 .workspace-toolbar strong { display: block; font-size: 1.12rem; letter-spacing: -.025em; }
 .workspace-toolbar small, .workspace-panel-heading small { display: block; margin-top: 4px; color: var(--muted); font-size: .83rem; }
 .workspace-refresh, .workspace-search button, .workspace-result button, .workspace-warning button, .workspace-confirm-actions button { min-height: 38px; border: 1px solid var(--line-strong); border-radius: 9px; padding: 0 14px; background: var(--panel-strong); color: var(--text); font-weight: 650; transition: background .18s ease, border-color .18s ease, transform .18s ease; }
+.workspace-subheading { margin-top: 18px; }
 .workspace-refresh { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .workspace-refresh:hover:not(:disabled), .workspace-result button:hover:not(:disabled), .workspace-confirm-actions button:hover:not(:disabled) { border-color: var(--accent); }
 .workspace-refresh:active:not(:disabled), .workspace-result button:active:not(:disabled), .workspace-confirm-actions button:active:not(:disabled) { transform: translateY(1px); }
