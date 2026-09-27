@@ -476,10 +476,7 @@ pub async fn start_pairing(
         .await
         .map_err(|error| connection_error(&error))?;
 
-    if response.status().as_u16() == 429 {
-        return Err("Too many pairing attempts. Wait a minute and try again.".into());
-    }
-    ensure_success(&response, "pairing")?;
+    let response = ensure_pairing_success(response).await?;
     let envelope: PairEnvelope = read_bounded_json(response).await?;
     validate_pairing_response(&envelope)?;
 
@@ -2681,7 +2678,7 @@ fn file_transfer_client() -> Result<Client, String> {
 
 fn bounded_device_name(input: &str) -> Result<String, String> {
     let name = input.trim();
-    if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
+    if name.is_empty() || name.encode_utf16().count() > 80 || name.chars().any(char::is_control) {
         return Err("The device name must contain between 1 and 80 characters.".into());
     }
     Ok(name.into())
@@ -2784,6 +2781,50 @@ fn ensure_success(response: &Response, operation: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct PairingErrorEnvelope {
+    code: Option<String>,
+}
+
+async fn ensure_pairing_success(response: Response) -> Result<Response, String> {
+    let status = response.status().as_u16();
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    if status == 429 {
+        return Err("Too many pairing attempts. Wait a minute and try again.".into());
+    }
+    if status == 400 {
+        let code = read_bounded_json_with_limit::<PairingErrorEnvelope>(response, 1024)
+            .await
+            .ok()
+            .and_then(|body| body.code);
+        return Err(pairing_rejection_message(code.as_deref()).into());
+    }
+    ensure_success(&response, "pairing")?;
+    Ok(response)
+}
+
+fn pairing_rejection_message(code: Option<&str>) -> &'static str {
+    match code {
+        Some("invalid_device_name") => {
+            "The device name is invalid. Use 1–80 characters without line breaks."
+        }
+        Some("invalid_device_platform" | "invalid_device_version" | "invalid_app_version") => {
+            "The server rejected this device's system details. Update HomePlace Desktop and try again."
+        }
+        Some("invalid_public_key") => {
+            "The server rejected this device's public key. Restart HomePlace Desktop and try again."
+        }
+        Some("invalid_protocol" | "invalid_capabilities" | "invalid_permissions") => {
+            "HomePlace Desktop and the server use different Link features. Update the server and try again."
+        }
+        _ => {
+            "The server rejected the pairing request. Check the device name and update the server if needed."
+        }
+    }
 }
 
 async fn read_bounded_json<T: DeserializeOwned>(response: Response) -> Result<T, String> {
@@ -2957,8 +2998,21 @@ mod tests {
         assert_eq!(bounded_device_name("  Studio Mac  ").unwrap(), "Studio Mac");
         assert!(bounded_device_name("").is_err());
         assert!(bounded_device_name(&"a".repeat(81)).is_err());
+        assert!(bounded_device_name(&"😀".repeat(41)).is_err());
         assert!(bounded_device_name("Office\nMac").is_err());
         assert!(!safe_identifier("../pairing"));
+    }
+
+    #[test]
+    fn pairing_errors_are_actionable_without_echoing_server_input() {
+        assert!(pairing_rejection_message(Some("invalid_device_name")).contains("device name"));
+        assert!(
+            pairing_rejection_message(Some("invalid_permissions")).contains("Update the server")
+        );
+        assert!(
+            pairing_rejection_message(Some("untrusted server text"))
+                .contains("rejected the pairing request")
+        );
     }
 
     #[test]

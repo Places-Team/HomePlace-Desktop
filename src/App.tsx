@@ -980,6 +980,7 @@ function MainApp() {
 
     setState("requesting");
     setError(null);
+    setPairing(null);
     try {
       const session = await invoke<PairingSession>("start_pairing", {
         address: server.address,
@@ -1957,7 +1958,7 @@ function MainApp() {
         )}
 
         <div id="connection-message" aria-live="polite">
-          {error && <div className="connection-message error">{error}</div>}
+          {error && <div className="connection-message error" role="alert">{error}</div>}
           {server && state !== "not-configured" && state !== "connected" && (
             <div className="connection-message">
               <div>
