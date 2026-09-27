@@ -247,7 +247,6 @@ enum HeartbeatUpdate {
 }
 
 #[derive(Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct NotificationContent {
     title: String,
     body: String,
@@ -3009,14 +3008,15 @@ mod tests {
             })))
             .is_err()
         );
-        assert!(
-            notification_content(&notification_event(serde_json::json!({
-                "title": "HomePlace",
-                "body": "Message",
-                "url": "https://example.net"
-            })))
-            .is_err()
-        );
+        let content = notification_content(&notification_event(serde_json::json!({
+            "title": "HomePlace",
+            "body": "Message",
+            "url": "/events",
+            "tag": "item-server",
+            "urgent": true
+        })))
+        .unwrap();
+        assert_eq!(content.title, "HomePlace");
     }
 
     #[test]
