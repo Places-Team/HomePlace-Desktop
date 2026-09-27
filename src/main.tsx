@@ -5,6 +5,7 @@ import "./styles/base.css";
 import "./styles/shell.css";
 import "./styles/design.css";
 import "./styles/usability.css";
+import "./styles/theme-polish.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

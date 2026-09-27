@@ -171,8 +171,9 @@ export function ServerWorkspace({ kind, language, activeServerId, onOpenConnecti
   const monitoring = overview?.monitoring;
   const requests = overview?.requests;
   const instances = requests?.instances ?? [];
-  const queue = instances.flatMap((instance) => (instance.queue ?? []).map((item) => ({ ...item, instance: instance.label })));
-  const upcoming = instances
+  const filteredInstances = filterMediaResults(instances, mediaFilter);
+  const queue = filteredInstances.flatMap((instance) => (instance.queue ?? []).map((item) => ({ ...item, instance: instance.label })));
+  const upcoming = filteredInstances
     .flatMap((instance) => (instance.upcoming ?? []).map((item) => ({ ...item, instance: instance.label })))
     .filter((item) => Number.isFinite(item.at) && !Number.isNaN(new Date(item.at).getTime()) && item.title)
     .sort((a, b) => a.at - b.at)
@@ -215,17 +216,21 @@ export function ServerWorkspace({ kind, language, activeServerId, onOpenConnecti
     </>}
     {kind === "media" && <>
       {overview && <div className="workspace-summary media-summary">
-        <div><small>Radarr / Sonarr</small><strong>{instances.length}</strong><em>{ru ? "подключённых экземпляров" : "connected instances"}</em></div>
-        <div><small>{ru ? "Очередь" : "Queue"}</small><strong>{instances.reduce((count, item) => count + (item.queueCount || 0), 0)}</strong><em>{ru ? "задач" : "items"}</em></div>
+        <div><small>Radarr / Sonarr</small><strong>{filteredInstances.length}</strong><em>{ru ? "экземпляров в разделе" : "instances in view"}</em></div>
+        <div><small>{ru ? "Очередь" : "Queue"}</small><strong>{filteredInstances.reduce((count, item) => count + (item.queueCount || 0), 0)}</strong><em>{ru ? "задач в разделе" : "items in view"}</em></div>
         <div><small>qBittorrent</small><strong>{requests?.qbittorrent?.active ?? "—"}</strong><em>{requests?.qbittorrent ? `${speed(requests.qbittorrent.downloadSpeed)} ↓` : (ru ? "Не подключён" : "Not connected")}</em></div>
       </div>}
+      <div className="workspace-media-view" role="group" aria-label={ru ? "Тип медиаконтента" : "Media type"}>
+        {([ ["all", ru ? "Всё" : "All"], ["movies", ru ? "Фильмы" : "Movies"], ["series", ru ? "Сериалы" : "Series"] ] as const).map(([value, label]) =>
+          <button type="button" key={value} aria-pressed={mediaFilter === value} className={mediaFilter === value ? "selected" : ""} onClick={() => setMediaFilter(value)}>{label}</button>
+        )}
+        <span>{ru ? "Фильтр действует на поиск, очередь и календарь" : "Filters search, queue, and calendar"}</span>
+      </div>
       <div className="workspace-media-grid">
         <section className="workspace-panel"><div className="workspace-panel-heading"><h2>{ru ? "Поиск" : "Search"}</h2><small>{ru ? "Фильмы и сериалы" : "Movies and shows"}</small></div><form className="workspace-search" onSubmit={(event) => void search(event)}><input aria-label={ru ? "Название фильма или сериала" : "Movie or show title"} value={query} onChange={(event) => { searchVersion.current += 1; setQuery(event.target.value); setSearching(false); setSearched(false); setResults([]); setSearchError(null); }} placeholder={ru ? "Название фильма или сериала" : "Movie or show title"} maxLength={80} /><button type="submit" disabled={searching || query.trim().length < 2}>{searching ? "…" : (ru ? "Найти" : "Search")}</button></form>
           {searchError && <p className="workspace-inline-error" role="alert">{searchError}</p>}{requestError && !confirm && <p className="workspace-inline-error" role="alert">{requestError}</p>}{requestNotice && <p className="workspace-notice" role="status">{requestNotice}</p>}
           {searched && !results.length && !searchError && <p className="workspace-empty">{ru ? "Ничего не найдено. Проверьте запрос и настройки Radarr/Sonarr." : "No results. Check the title and Radarr/Sonarr configuration."}</p>}
-          {searched && results.length > 0 && <div className="workspace-result-filters" role="group" aria-label={ru ? "Тип результатов" : "Result type"}>{([
-            ["all", ru ? "Все" : "All"], ["movies", ru ? "Фильмы" : "Movies"], ["series", ru ? "Сериалы" : "Series"],
-          ] as const).map(([value, label]) => <button type="button" key={value} className={mediaFilter === value ? "selected" : ""} aria-pressed={mediaFilter === value} onClick={() => setMediaFilter(value)}>{label}</button>)}<small>{filteredResults.length}</small></div>}
+        {searched && results.length > 0 && <p className="workspace-result-count">{filteredResults.length} {ru ? "результатов" : "results"}</p>}
           {searched && results.length > 0 && filteredResults.length === 0 && <p className="workspace-empty">{ru ? "Для выбранного типа результатов нет." : "No results of this type."}</p>}
           <div className="workspace-results">{filteredResults.map((item) => <div className="workspace-result" key={`${item.instanceLabel}:${item.externalId}`}><span className="workspace-result-mark">{item.kind.toLowerCase().includes("sonarr") ? "S" : "R"}</span><div><b>{item.title}</b><small>{[item.year, item.instanceLabel].filter(Boolean).join(" · ")}</small>{item.overview && <p>{item.overview}</p>}</div><button type="button" disabled={item.inLibrary || requesting} onClick={() => setConfirm(item)}>{item.inLibrary ? (ru ? "В библиотеке" : "In library") : (ru ? "Добавить" : "Add")}</button></div>)}</div>
         </section>

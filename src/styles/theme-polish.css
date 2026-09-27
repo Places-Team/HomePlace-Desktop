@@ -1,0 +1,46 @@
+/* Contrast and warm accent pass for both desktop themes. */
+.app-content .settings-panel { background: var(--panel); color: var(--text); }
+.settings-panel .settings-row { border-color: var(--line); }
+.settings-panel .settings-row b { color: var(--text); font-size: 15px; }
+.settings-panel .settings-row small { color: var(--text-soft); font-size: 12px; }
+.settings-panel .settings-row input, .switch-control input, .startup-setting input { accent-color: var(--accent); }
+.settings-panel .section-heading h3, .settings-about summary b { color: var(--text); }
+.theme-choices { gap: 8px; background: transparent; }
+.theme-choices > button { border: 1px solid var(--line-strong); border-radius: 9px; background: var(--panel-soft); transition: border-color 180ms ease, background-color 180ms ease; }
+.theme-choices > button:hover, .theme-choices > button.active { border-color: var(--accent); background: var(--accent-soft); }
+.theme-choices b { color: var(--text); font-size: 15px; }
+.theme-choices small { color: var(--text-soft); font-size: 12px; }
+.theme-preview { border-radius: 6px; }
+.field-row input, .share-composer textarea, .calendar-form input, .calendar-form label:not(.calendar-all-day) input { background: var(--field); color: var(--text); border-color: var(--line-strong); }
+.field-row input:focus { border-color: var(--accent); background: var(--field); }
+.field-row button { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); box-shadow: none; }
+.connect-form label, .pairing-form label, .startup-setting b, .connected-card strong, .profile-list b { color: var(--text); }
+.hint, .startup-setting small, .profile-list small, .server-address { color: var(--text-soft) !important; }
+.connection-message, .connected-card { border-color: var(--line-strong); background: var(--positive-soft); color: var(--text); }
+.connection-message span { color: var(--text-soft); }
+.connection-message.error { border-color: var(--negative); background: var(--negative-soft); }
+.connection-actions button, .profile-heading button, .secondary-action { border-color: var(--line-strong); background: var(--panel-strong); color: var(--text); }
+.connection-actions button:hover, .profile-heading button:hover, .secondary-action:hover { border-color: var(--accent); color: var(--accent-strong); }
+.profile-switcher { background: var(--panel-soft); }
+.profile-list > button { background: var(--panel); color: var(--text-soft); }
+.profile-list > button > span:first-child, .offer-icon, .quick-actions button > span, .section-heading > span { background: var(--accent-soft); color: var(--accent-strong); }
+.profile-list > button.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-soft); }
+.startup-setting { border-color: var(--line); }
+.muted-panel { color: var(--text-soft); }
+.connected-card .setting-error { color: var(--negative); }
+.progress .active span { border-color: var(--accent); background: var(--accent-soft); }
+.share-drop-zone.dragging, .quick-share-shelf.dragging { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.sidebar-nav button.active .nav-icon, .language-switcher button.active { color: var(--accent-strong); }
+.language-switcher button.active { background: var(--accent-soft); }
+html[data-theme="light"] .settings-panel, html[data-theme="light"] .connected-card { box-shadow: 0 9px 28px rgba(77, 50, 26, .055); }
+html[data-theme="light"] .settings-about summary > span:last-child, html[data-theme="light"] .eyebrow { color: var(--muted); }
+html[data-theme="light"] .settings-row input:disabled { opacity: .65; }
+html[data-theme="light"] .profile-list small { color: var(--muted) !important; }
+html[data-theme="light"] .calendar-grid button.today { color: var(--accent-strong); background: var(--accent-soft); }
+html[data-theme="dark"] .theme-choices > button.active { background: color-mix(in srgb, var(--accent) 14%, var(--panel-soft)); }
+.workspace-media-view { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; border-bottom: 1px solid var(--line); margin-top: -3px; padding: 0 0 13px; }
+.workspace-media-view button { min-height: 35px; border: 1px solid var(--line); border-radius: 7px; background: transparent; padding: 6px 12px; color: var(--text-soft); font-size: 13px; }
+.workspace-media-view button.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
+.workspace-media-view span, .workspace-result-count { margin-left: auto; color: var(--muted); font-size: 12px; }
+.workspace-media-view button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .theme-choices > button { transition: none; } }

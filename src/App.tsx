@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FormEvent, Fragment, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { IdeasBoard } from "./components/IdeasBoard";
+import { HomeOverview } from "./components/HomeOverview";
 import { NotificationHistory } from "./components/NotificationHistory";
 import { ServerWorkspace } from "./components/ServerWorkspace";
 import { TelegramStatus } from "./components/TelegramStatus";
@@ -2297,6 +2298,7 @@ function MainApp() {
               <span><Icon name="monitoring" size={18} /></span><b>{ui.nav.monitoring}</b><small>{language === "ru" ? "Состояние сервера" : "Server health"}</small>
             </button>
           </section>
+          <HomeOverview key={activeServerId} serverId={activeServerId} language={language} onNavigate={setActiveSection} />
           </>}
         </section>
       )}
