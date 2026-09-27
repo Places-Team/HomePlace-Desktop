@@ -2571,7 +2571,7 @@ function MainApp() {
               <button type="button" className={theme === "light" ? "active" : undefined} onClick={() => setTheme("light")}>
                 <span className="theme-preview light-preview" aria-hidden><i /><i /><i /></span>
                 <b>{language === "ru" ? "Светлая" : "Light"}</b>
-                <small>{language === "ru" ? "Мягкий дневной контраст" : "Soft daylight contrast"}</small>
+                  <small>{language === "ru" ? "Тёплые молочные оттенки" : "Warm milk-toned surfaces"}</small>
               </button>
               <button type="button" className={theme === "dark" ? "active" : undefined} onClick={() => setTheme("dark")}>
                 <span className="theme-preview dark-preview" aria-hidden><i /><i /><i /></span>
