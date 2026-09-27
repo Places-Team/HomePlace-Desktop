@@ -1210,6 +1210,7 @@ pub async fn list_ideas(
     query: Option<String>,
     category_id: Option<String>,
     archived: bool,
+    completed: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     if cursor
         .as_deref()
@@ -1250,6 +1251,11 @@ pub async fn list_ideas(
     }
     if archived {
         endpoint.query_pairs_mut().append_pair("archived", "1");
+    }
+    if let Some(completed) = completed {
+        endpoint
+            .query_pairs_mut()
+            .append_pair("completed", if completed { "1" } else { "0" });
     }
     let response = workspace_http_client(20)?
         .get(endpoint)

@@ -352,7 +352,8 @@ export function App() {
 
 function MainApp() {
   const [activeSection, setActiveSection] = useState<AppSection>("overview");
-  const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  const [sidebarPinned, setSidebarPinned] = useState(() => window.localStorage.getItem("homeplace-sidebar-pinned") === "1");
+  const [sidebarExpanded, setSidebarExpanded] = useState(sidebarPinned);
   const [theme, setTheme] = useState<ThemeMode>(storedTheme);
   const [language, setLanguage] = useState<Language>(() => {
     const saved = window.localStorage.getItem("homeplace-language");
@@ -1643,7 +1644,7 @@ function MainApp() {
   }
 
   return (
-    <main className={`desktop-shell${sidebarExpanded ? " sidebar-expanded" : ""}`}>
+    <main className={`desktop-shell${sidebarExpanded ? " sidebar-expanded" : ""}${sidebarPinned ? " sidebar-pinned" : ""}`}>
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
       <div
@@ -1660,12 +1661,12 @@ function MainApp() {
         aria-label="Main navigation"
         onMouseEnter={() => setSidebarExpanded(true)}
         onMouseLeave={(event) => {
-          if (!event.currentTarget.contains(document.activeElement)) setSidebarExpanded(false);
+          if (!sidebarPinned && !event.currentTarget.contains(document.activeElement)) setSidebarExpanded(false);
         }}
         onFocus={() => setSidebarExpanded(true)}
         onBlur={(event) => {
           if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
-            setSidebarExpanded(false);
+            if (!sidebarPinned) setSidebarExpanded(false);
           }
         }}
       >
@@ -1709,6 +1710,20 @@ function MainApp() {
             </Fragment>
           ))}
         </nav>
+
+        <button
+          type="button"
+          className="sidebar-pin"
+          aria-pressed={sidebarPinned}
+          aria-label={sidebarPinned ? (language === "ru" ? "Открепить боковое меню" : "Unpin sidebar") : (language === "ru" ? "Закрепить боковое меню" : "Pin sidebar")}
+          title={sidebarPinned ? (language === "ru" ? "Открепить меню" : "Unpin sidebar") : (language === "ru" ? "Закрепить меню" : "Pin sidebar")}
+          onClick={() => {
+            const next = !sidebarPinned;
+            setSidebarPinned(next);
+            setSidebarExpanded(true);
+            window.localStorage.setItem("homeplace-sidebar-pinned", next ? "1" : "0");
+          }}
+        ><Icon name="pin" size={18} /><span>{sidebarPinned ? (language === "ru" ? "Меню закреплено" : "Sidebar pinned") : (language === "ru" ? "Закрепить меню" : "Pin sidebar")}</span></button>
 
         <div className="sidebar-status">
           <span className={lastHeartbeat ? "online" : undefined} aria-hidden />
