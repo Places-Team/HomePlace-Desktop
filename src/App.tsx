@@ -8,6 +8,7 @@ import { IdeasBoard } from "./components/IdeasBoard";
 import { HomeOverview } from "./components/HomeOverview";
 import { NotificationHistory } from "./components/NotificationHistory";
 import { ServerWorkspace } from "./components/ServerWorkspace";
+import { MediaCatalog } from "./components/MediaCatalog";
 import { TelegramStatus } from "./components/TelegramStatus";
 import { TemporaryExchange, type ExchangeContent } from "./components/TemporaryExchange";
 import { exchangeExpiryOptions, exchangeGateway } from "./lib/exchangeGateway";
@@ -2684,9 +2685,8 @@ function MainApp() {
         </section>
       )}
 
-      {(activeSection === "media" || activeSection === "monitoring") && (
-        <ServerWorkspace key={activeServerId ?? "unpaired"} kind={activeSection} language={language} activeServerId={activeServerId} onOpenConnections={() => setActiveSection("settings")} />
-      )}
+      {activeSection === "media" && <MediaCatalog key={activeServerId ?? "unpaired"} activeServerId={activeServerId} language={language} onOpenConnections={() => setActiveSection("settings")} />}
+      {activeSection === "monitoring" && <ServerWorkspace key={activeServerId ?? "unpaired"} kind="monitoring" language={language} activeServerId={activeServerId} onOpenConnections={() => setActiveSection("settings")} />}
       {activeSection === "notifications" && (
         <section className="section-stack" aria-label="Notifications">
           <section className="metric-grid notification-metrics">

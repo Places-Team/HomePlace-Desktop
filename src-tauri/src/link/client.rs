@@ -1930,6 +1930,179 @@ pub async fn link_telegram_test() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn link_media_catalog(
+    query: String,
+    kind: String,
+    category: String,
+    page: u32,
+    language: String,
+) -> Result<serde_json::Value, String> {
+    let query = query.trim();
+    if query.chars().count() > 120 || query.chars().any(char::is_control)
+        || (!query.is_empty() && query.chars().count() < 2)
+        || !matches!(kind.as_str(), "all" | "movie" | "tv")
+        || !matches!(category.as_str(), "all" | "anime")
+        || !(1..=100).contains(&page)
+        || !matches!(language.as_str(), "ru" | "en")
+    {
+        return Err("The media catalog request is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let mut endpoint = base_url.join("api/link/media")
+        .map_err(|_| "Could not create media catalog API address.".to_string())?;
+    {
+        let mut params = endpoint.query_pairs_mut();
+        if !query.is_empty() { params.append_pair("q", query); }
+        params.append_pair("kind", &kind).append_pair("category", &category)
+            .append_pair("page", &page.to_string()).append_pair("lang", &language);
+    }
+    let response = workspace_http_client(25)?.get(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str()).send().await
+        .map_err(|error| connection_error(&error))?;
+    mobile_api_status(&response, "media.request")?;
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 512 * 1024).await?;
+    if !data.get("configured").is_some_and(serde_json::Value::is_boolean)
+        || !data.get("items").is_some_and(serde_json::Value::is_array) {
+        return Err("The HomePlace server returned an invalid media catalog.".into());
+    }
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn link_media_details(kind: String, id: u32, language: String) -> Result<serde_json::Value, String> {
+    if !matches!(kind.as_str(), "movie" | "tv") || id == 0 || !matches!(language.as_str(), "ru" | "en") {
+        return Err("The media details request is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let mut endpoint = base_url.join(&format!("api/link/media/{kind}/{id}"))
+        .map_err(|_| "Could not create media details API address.".to_string())?;
+    endpoint.query_pairs_mut().append_pair("lang", &language);
+    let response = workspace_http_client(25)?.get(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str()).send().await
+        .map_err(|error| connection_error(&error))?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err("Media details are unavailable on the HomePlace server.".into());
+    }
+    mobile_api_status(&response, "media.request")?;
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 256 * 1024).await?;
+    if !data.get("details").is_some_and(serde_json::Value::is_object)
+        || !data.get("profiles").is_some_and(serde_json::Value::is_array) {
+        return Err("The HomePlace server returned invalid media details.".into());
+    }
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn link_media_catalog_requests() -> Result<serde_json::Value, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url.join("api/link/media/requests")
+        .map_err(|_| "Could not create media requests API address.".to_string())?;
+    let response = workspace_http_client(25)?.get(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str()).send().await
+        .map_err(|error| connection_error(&error))?;
+    mobile_api_status(&response, "media.request")?;
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 256 * 1024).await?;
+    if !data.get("requests").is_some_and(serde_json::Value::is_array) {
+        return Err("The HomePlace server returned invalid media requests.".into());
+    }
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn link_create_catalog_request(
+    kind: String,
+    media_id: u32,
+    seasons: Option<Vec<u32>>,
+    profile_key: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if !matches!(kind.as_str(), "movie" | "tv") || media_id == 0
+        || seasons.as_ref().is_some_and(|values| values.len() > 100 || values.iter().any(|value| !(1..=100).contains(value)))
+        || profile_key.as_ref().is_some_and(|value| value.len() > 150 || value.chars().any(char::is_control)) {
+        return Err("The media request is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url.join("api/link/media/requests")
+        .map_err(|_| "Could not create media request API address.".to_string())?;
+    let mut body = serde_json::json!({ "kind": kind, "mediaId": media_id });
+    if let Some(values) = seasons { body["seasons"] = serde_json::json!(values); }
+    if let Some(value) = profile_key { body["profileKey"] = serde_json::json!(value); }
+    let response = workspace_http_client(30)?.post(endpoint)
+        .header("Accept", "application/json")
+        .bearer_auth(credential.as_str()).json(&body).send().await
+        .map_err(|error| connection_error(&error))?;
+    mobile_api_status(&response, "media.request")?;
+    let accepted = response.status().is_success();
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 64 * 1024).await?;
+    if !accepted || data.get("ok") != Some(&serde_json::Value::Bool(true)) {
+        return Err(data.get("error").and_then(serde_json::Value::as_str)
+            .unwrap_or("HomePlace could not create the media request.")
+            .chars().take(240).collect());
+    }
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn link_media_image(path: String) -> Result<String, String> {
+    if path.len() > 500 || !path.starts_with("/api/media/") || path.contains("..")
+        || path.chars().any(char::is_control) {
+        return Err("The media image address is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url.join(path.trim_start_matches('/'))
+        .map_err(|_| "Could not create media image address.".to_string())?;
+    if endpoint.origin() != base_url.origin()
+        || !matches!(endpoint.path(), "/api/media/tmdb-image" | "/api/media/jellyfin-image")
+            && !endpoint.path().starts_with("/api/media/jellyfin-image/") {
+        return Err("The media image address is invalid.".into());
+    }
+    let response = workspace_http_client(20)?.get(endpoint)
+        .bearer_auth(credential.as_str()).send().await
+        .map_err(|error| connection_error(&error))?;
+    if !response.status().is_success() { return Err("The media image is unavailable.".into()); }
+    let mime = response.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok()).unwrap_or("").split(';').next().unwrap_or("").to_string();
+    if !matches!(mime.as_str(), "image/jpeg" | "image/png" | "image/webp") {
+        return Err("The media image has an unsupported format.".into());
+    }
+    if response.content_length().is_some_and(|size| size > 8 * 1024 * 1024) {
+        return Err("The media image is too large.".into());
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| "The media image could not be read.".to_string())?;
+        if body.len().saturating_add(chunk.len()) > 8 * 1024 * 1024 {
+            return Err("The media image is too large.".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(format!("data:{mime};base64,{}", STANDARD.encode(&body)))
+}
+
+#[tauri::command]
 pub async fn link_media_search(query: String) -> Result<serde_json::Value, String> {
     let query = query.trim();
     if query.chars().count() < 2
