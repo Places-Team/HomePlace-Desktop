@@ -1,5 +1,22 @@
 type WateringSchedule = { lastWateredAt: string; intervalDays: number };
 
+export type SyncedPlant = {
+  clientId: string;
+  name: string;
+  species: string;
+  location: string;
+  notes: string;
+  intervalDays: number;
+  lastWateredAt: string;
+  remindersEnabled?: boolean;
+  revision: number;
+  deletedAt: string | null;
+  photo?: { url: string; version: string; maxBytes: number } | null;
+};
+
+export type PlantFeatures = { plants: boolean; plantPhotos: boolean; plantReminders: boolean; maxPlantPhotoBytes: number };
+export type PlantReminderSettings = { enabled: boolean; app: boolean; telegram: boolean; time: string; timeZone: string; repeatDays: number };
+
 function calendarDay(date: Date, timeZone: string): number {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -15,7 +32,7 @@ export function daysUntilWater(plant: WateringSchedule, today: Date, timeZone = 
   return calendarDay(new Date(plant.lastWateredAt), timeZone) + plant.intervalDays - calendarDay(today, timeZone);
 }
 
-export function photoCacheKey(serverId: string, deviceId: string, plantId: string, version: number): string {
+export function photoCacheKey(serverId: string, deviceId: string, plantId: string, version: string): string {
   return JSON.stringify([serverId, deviceId, plantId, version]);
 }
 
@@ -34,4 +51,28 @@ export function plantIdFromNotification(tag: string | null | undefined): string 
 
 export function waterPlantRequest(clientId: string, revision: number, lastWateredAt: string) {
   return { action: "water" as const, clientId, revision, lastWateredAt };
+}
+
+export function validatePlantPhoto(file: { type: string; size: number }, maxBytes: number): "unsupported" | "too-large" | null {
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) return "unsupported";
+  if (!Number.isFinite(file.size) || file.size < 1 || file.size > maxBytes) return "too-large";
+  return null;
+}
+
+export function parsePlantReminderSettings(value: unknown): PlantReminderSettings | null {
+  if (typeof value !== "object" || value === null) return null;
+  const data = value as Record<string, unknown>;
+  if (typeof data.enabled !== "boolean" || typeof data.app !== "boolean" || typeof data.telegram !== "boolean" ||
+    typeof data.time !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(data.time) ||
+    typeof data.timeZone !== "string" || data.timeZone.length > 80 ||
+    !Number.isInteger(data.repeatDays) || (data.repeatDays as number) < 0 || (data.repeatDays as number) > 30) return null;
+  try { new Intl.DateTimeFormat("en-US", { timeZone: data.timeZone }); }
+  catch { return null; }
+  return data as PlantReminderSettings;
+}
+
+export function plantSettingsConflict(previous: PlantReminderSettings, incoming: PlantReminderSettings, hasUnsavedEdits: boolean): boolean {
+  return hasUnsavedEdits && (previous.enabled !== incoming.enabled || previous.app !== incoming.app ||
+    previous.telegram !== incoming.telegram || previous.time !== incoming.time ||
+    previous.timeZone !== incoming.timeZone || previous.repeatDays !== incoming.repeatDays);
 }

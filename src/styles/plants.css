@@ -1,0 +1,48 @@
+.home-overview-plant .home-overview-plant-title {
+  justify-content: flex-start;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+}
+.home-overview-plant .home-overview-plant-title:hover { color: var(--accent-strong); }
+.plant-settings { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 13px; }
+.plant-settings summary { color: var(--text); cursor: pointer; font-size: 14px; font-weight: 650; }
+.plant-settings form { display: grid; gap: 12px; padding-top: 10px; }
+.plant-settings p, .plant-settings small { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.plant-settings label { display: flex; align-items: center; gap: 9px; color: var(--text); font-size: 13px; }
+.plant-settings input[type="checkbox"] { accent-color: var(--accent); inline-size: 17px; block-size: 17px; }
+.plant-settings-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.plant-settings-fields label { display: grid; gap: 5px; }
+.plant-settings-fields input { min-width: 0; width: 100%; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--field); padding: 8px; color: var(--text); font: inherit; }
+.plant-settings-warning { display: grid; gap: 8px; border-left: 3px solid var(--accent); background: var(--panel-strong); padding: 12px; }
+.plant-settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.plant-settings-actions button, .plant-dialog-actions button, .plant-dialog-upload { border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel-strong); padding: 8px 12px; color: var(--text); cursor: pointer; font-size: 13px; }
+.plant-settings-actions button:first-child, .plant-dialog-actions button:first-of-type { border-color: var(--accent); background: var(--accent); color: #21160d; font-weight: 700; }
+.plant-settings-actions button:disabled, .plant-dialog-actions button:disabled { cursor: not-allowed; opacity: .55; }
+.plant-dialog-backdrop { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; background: #080807ad; padding: 20px; }
+.plant-dialog { width: min(100%, 550px); max-height: min(92vh, 850px); overflow-y: auto; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--panel); box-shadow: 0 24px 80px #0006; padding: 20px; color: var(--text); }
+.plant-dialog header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.plant-dialog header small { color: var(--accent-strong); font-size: 10px; font-weight: 750; letter-spacing: .1em; }
+.plant-dialog h2 { margin: 4px 0 16px; font-size: 25px; line-height: 1.1; }
+.plant-dialog header button { border: 0; background: transparent; padding: 0 4px; color: var(--muted); cursor: pointer; font-size: 27px; }
+.plant-dialog-photo { display: grid; place-items: center; min-height: 240px; max-height: 350px; overflow: hidden; border-radius: 12px; background: var(--panel-strong); }
+.plant-dialog-photo img { width: 100%; max-height: 350px; object-fit: contain; }
+.plant-dialog-photo-empty { color: var(--muted); font-size: 14px; }
+.plant-dialog-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.plant-dialog-meta span { border-radius: 6px; background: var(--panel-strong); padding: 6px 8px; color: var(--text-soft); font-size: 12px; }
+.plant-dialog-notes { font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
+.plant-dialog-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.plant-dialog-upload { position: relative; overflow: hidden; }
+.plant-dialog-upload input { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; }
+.plant-dialog-upload:focus-within { outline: 2px solid var(--accent); outline-offset: 3px; }
+.plant-dialog-pending { min-width: 100%; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; }
+.plant-dialog-current { display: grid; gap: 8px; margin-top: 16px; }
+.plant-dialog-current small { color: var(--muted); font-size: 12px; }
+.plant-dialog-current img { width: min(100%, 190px); max-height: 160px; border-radius: 8px; object-fit: contain; background: var(--panel-strong); }
+.plant-dialog-error { border-left: 3px solid var(--negative); background: var(--negative-soft); padding: 10px 12px; font-size: 13px; }
+.plant-dialog-privacy { margin: 16px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+@media (max-width: 600px) { .plant-settings-fields { grid-template-columns: 1fr; } .plant-dialog { padding: 16px; } }

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Language } from "../lib/i18n";
+import { plantIdFromNotification } from "../lib/plantSync";
 
 type Notification = {
   id: string;
@@ -21,7 +22,7 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function NotificationHistory({ language, activeServerId }: { language: Language; activeServerId?: string | null }) {
+export function NotificationHistory({ language, activeServerId, onOpenPlant }: { language: Language; activeServerId?: string | null; onOpenPlant?: (id: string) => void }) {
   const [items, setItems] = useState<Notification[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -96,6 +97,7 @@ export function NotificationHistory({ language, activeServerId }: { language: La
                   </time>
                 </div>
                 <p>{item.body}</p>
+                {plantIdFromNotification(item.tag) && <button type="button" onClick={() => onOpenPlant?.(plantIdFromNotification(item.tag)!)}>{ru ? "Открыть растение" : "Open plant"}</button>}
               </div>
             </div>
           ))}

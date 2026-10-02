@@ -1814,22 +1814,436 @@ pub async fn link_mobile_overview() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn link_plants() -> Result<serde_json::Value, String> {
+pub async fn link_plants(app: AppHandle) -> Result<serde_json::Value, String> {
     let profile = identity::load_profile()?
         .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
     validate_stored_profile(&profile)?;
     let credential = identity::load_credential(&profile.server_id)?;
     let (base_url, _) = validate_address(&profile.address)?;
-    let endpoint = base_url.join("api/link/plants")
+    let endpoint = base_url
+        .join("api/link/plants")
         .map_err(|_| "Could not create plants API address.".to_string())?;
-    let response = workspace_http_client(20)?.get(endpoint)
+    let response = workspace_http_client(20)?
+        .get(endpoint)
         .header("Accept", "application/json")
-        .bearer_auth(credential.as_str()).send().await
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
         .map_err(|error| connection_error(&error))?;
     mobile_api_status(&response, "plants.manage")?;
     let data: serde_json::Value = read_bounded_json_with_limit(response, 512 * 1024).await?;
     if !data.get("plants").is_some_and(serde_json::Value::is_array) {
         return Err("The HomePlace server returned invalid plants.".into());
+    }
+    reconcile_plant_photo_cache(&app, &profile, &data);
+    Ok(data)
+}
+
+const MAX_PLANT_PHOTO_BYTES: usize = 12 * 1024 * 1024;
+
+fn plant_photo_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
+fn plant_photo_cache_name(
+    server_id: &str,
+    device_id: &str,
+    plant_id: &str,
+    version: &str,
+) -> String {
+    let scope = format!(
+        "{:x}",
+        Sha256::digest(format!("{server_id}:{device_id}").as_bytes())
+    );
+    let revision = format!("{:x}", Sha256::digest(version.as_bytes()));
+    format!("{scope}/{plant_id}-{revision}.bin")
+}
+
+fn reconcile_plant_photo_cache(app: &AppHandle, profile: &StoredProfile, data: &serde_json::Value) {
+    let Some(plants) = data.get("plants").and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    if !plants.iter().all(|plant| plant.get("photo").is_some()) {
+        return;
+    }
+    let scope = format!(
+        "{:x}",
+        Sha256::digest(format!("{}:{}", profile.server_id, profile.device_id).as_bytes())
+    );
+    let Ok(root) = app.path().app_data_dir() else {
+        return;
+    };
+    let directory = root.join("plant-photos").join(scope);
+    let expected: HashSet<String> = plants
+        .iter()
+        .filter(|plant| {
+            plant
+                .get("deletedAt")
+                .is_some_and(serde_json::Value::is_null)
+        })
+        .filter_map(|plant| {
+            let id = plant.get("clientId")?.as_str()?;
+            if uuid::Uuid::parse_str(id).is_err() {
+                return None;
+            }
+            let version = plant.pointer("/photo/version")?.as_str()?;
+            Some(
+                plant_photo_cache_name(&profile.server_id, &profile.device_id, id, version)
+                    .rsplit('/')
+                    .next()?
+                    .to_string(),
+            )
+        })
+        .collect();
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.ends_with(".bin") && !expected.contains(name) {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn plant_photo_cache_path(
+    app: &AppHandle,
+    profile: &StoredProfile,
+    plant_id: &str,
+    version: &str,
+) -> Result<PathBuf, String> {
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "Could not access private plant photo storage.".to_string())?
+        .join("plant-photos");
+    let path = root.join(plant_photo_cache_name(
+        &profile.server_id,
+        &profile.device_id,
+        plant_id,
+        version,
+    ));
+    let parent = path
+        .parent()
+        .ok_or_else(|| "The plant photo cache path is invalid.".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|_| "Could not prepare private plant photo storage.".to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
+            .map_err(|_| "Could not secure plant photo storage.".to_string())?;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .map_err(|_| "Could not secure plant photo storage.".to_string())?;
+    }
+    Ok(path)
+}
+
+fn prune_plant_photo_cache(path: &Path, plant_id: &str) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let other = entry.path();
+        if other != path
+            && other
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(&format!("{plant_id}-")) && name.ends_with(".bin")
+                })
+        {
+            let _ = fs::remove_file(other);
+        }
+    }
+}
+
+fn plant_photo_data_uri(bytes: &[u8]) -> Result<String, String> {
+    let mime = plant_photo_mime(bytes)
+        .ok_or_else(|| "The plant photo format is unsupported.".to_string())?;
+    Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
+}
+
+fn plant_photo_etag_matches(header: Option<&str>, version: &str) -> bool {
+    header.is_some_and(|value| {
+        value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            == Some(version)
+    })
+}
+
+fn plant_photo_endpoint(profile: &StoredProfile, client_id: &str) -> Result<Url, String> {
+    uuid::Uuid::parse_str(client_id).map_err(|_| "The plant identifier is invalid.".to_string())?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    base_url
+        .join(&format!("api/link/plants/{client_id}/photo"))
+        .map_err(|_| "Could not create plant photo address.".to_string())
+}
+
+#[tauri::command]
+pub async fn link_plant_features() -> Result<serde_json::Value, String> {
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/info")
+        .map_err(|_| "Could not create Link discovery address.".to_string())?;
+    let response = workspace_http_client(12)?
+        .get(endpoint)
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    if !response.status().is_success() {
+        return Err("HomePlace Link discovery is unavailable.".into());
+    }
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 64 * 1024).await?;
+    let info: LinkInfo = serde_json::from_value(data.clone())
+        .map_err(|_| "The Link discovery response is invalid.".to_string())?;
+    validate_link_info(&info, OffsetDateTime::now_utc())
+        .map_err(|_| "The paired HomePlace server identity could not be verified.".to_string())?;
+    if info.server.id != profile.server_id {
+        return Err("The paired HomePlace server identity changed.".into());
+    }
+    Ok(serde_json::json!({
+        "plants": data.pointer("/features/plants").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        "plantPhotos": data.pointer("/features/plantPhotos").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        "plantReminders": data.pointer("/features/plantReminders").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        "maxPlantPhotoBytes": data.pointer("/limits/maxPlantPhotoBytes").and_then(serde_json::Value::as_u64)
+            .unwrap_or(0).min(MAX_PLANT_PHOTO_BYTES as u64),
+    }))
+}
+
+#[tauri::command]
+pub async fn link_plant_photo(
+    app: AppHandle,
+    client_id: String,
+    version: String,
+) -> Result<String, String> {
+    if version.is_empty() || version.len() > 150 || version.chars().any(char::is_control) {
+        return Err("The plant photo version is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let endpoint = plant_photo_endpoint(&profile, &client_id)?;
+    let cache_path = plant_photo_cache_path(&app, &profile, &client_id, &version)?;
+    if let Ok(metadata) = fs::metadata(&cache_path) {
+        if metadata.len() <= MAX_PLANT_PHOTO_BYTES as u64 {
+            if let Ok(bytes) = fs::read(&cache_path) {
+                if let Ok(uri) = plant_photo_data_uri(&bytes) {
+                    return Ok(uri);
+                }
+            }
+        }
+        let _ = fs::remove_file(&cache_path);
+    }
+    let credential = identity::load_credential(&profile.server_id)?;
+    let response = workspace_http_client(20)?
+        .get(endpoint)
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    mobile_api_status(&response, "plants.manage")?;
+    let declared = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    if !matches!(declared.as_str(), "image/jpeg" | "image/png" | "image/webp") {
+        return Err("The server returned an unsupported plant photo.".into());
+    }
+    let etag = response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|value| value.to_str().ok());
+    if !plant_photo_etag_matches(etag, &version) {
+        return Err("The plant photo changed on another device. Refresh the plant list.".into());
+    }
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_PLANT_PHOTO_BYTES as u64)
+    {
+        return Err("The plant photo exceeds the allowed size.".into());
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| "Could not read the plant photo.".to_string())?;
+        if body.len().saturating_add(chunk.len()) > MAX_PLANT_PHOTO_BYTES {
+            return Err("The plant photo exceeds the allowed size.".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    if plant_photo_mime(&body) != Some(declared.as_str()) {
+        return Err("The server returned a mismatched plant photo.".into());
+    }
+    let uri = plant_photo_data_uri(&body)?;
+    let temporary = cache_path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    if let Ok(mut file) = options.open(&temporary) {
+        if file.write_all(&body).is_ok() && file.sync_all().is_ok() {
+            let _ = fs::rename(&temporary, &cache_path);
+            prune_plant_photo_cache(&cache_path, &client_id);
+        }
+        let _ = fs::remove_file(&temporary);
+    }
+    Ok(uri)
+}
+
+#[tauri::command]
+pub async fn link_upload_plant_photo(
+    client_id: String,
+    revision: u64,
+    data_uri: String,
+) -> Result<serde_json::Value, String> {
+    if revision == 0 || data_uri.len() > MAX_PLANT_PHOTO_BYTES * 2 {
+        return Err("The plant photo request is too large or invalid.".into());
+    }
+    let (declared, encoded) = data_uri
+        .split_once(",")
+        .ok_or_else(|| "The selected image is invalid.".to_string())?;
+    let declared = declared
+        .strip_prefix("data:")
+        .and_then(|value| value.strip_suffix(";base64"))
+        .ok_or_else(|| "The selected image is invalid.".to_string())?;
+    if !matches!(declared, "image/jpeg" | "image/png" | "image/webp") {
+        return Err("Choose a JPEG, PNG or WebP image.".into());
+    }
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|_| "The selected image could not be read.".to_string())?;
+    if bytes.is_empty()
+        || bytes.len() > MAX_PLANT_PHOTO_BYTES
+        || plant_photo_mime(&bytes) != Some(declared)
+    {
+        return Err("The selected image format or size is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let endpoint = plant_photo_endpoint(&profile, &client_id)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let response = workspace_http_client(40)?
+        .post(endpoint)
+        .bearer_auth(credential.as_str())
+        .header(reqwest::header::CONTENT_TYPE, declared)
+        .header(reqwest::header::IF_MATCH, revision.to_string())
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    let conflict = response.status() == reqwest::StatusCode::CONFLICT;
+    if !conflict {
+        mobile_api_status(&response, "plants.manage")?;
+    }
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 64 * 1024).await?;
+    if conflict {
+        return Ok(serde_json::json!({ "conflict": true, "plant": data.get("plant") }));
+    }
+    if !data.get("plant").is_some_and(serde_json::Value::is_object) {
+        return Err("The server returned an invalid plant photo result.".into());
+    }
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn link_delete_plant_photo(
+    client_id: String,
+    revision: u64,
+) -> Result<serde_json::Value, String> {
+    if revision == 0 {
+        return Err("The plant revision is invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let endpoint = plant_photo_endpoint(&profile, &client_id)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let response = workspace_http_client(20)?
+        .delete(endpoint)
+        .bearer_auth(credential.as_str())
+        .header(reqwest::header::IF_MATCH, revision.to_string())
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    let conflict = response.status() == reqwest::StatusCode::CONFLICT;
+    if !conflict {
+        mobile_api_status(&response, "plants.manage")?;
+    }
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 64 * 1024).await?;
+    if conflict {
+        return Ok(serde_json::json!({ "conflict": true, "plant": data.get("plant") }));
+    }
+    if !data.get("plant").is_some_and(serde_json::Value::is_object) {
+        return Err("The server returned an invalid plant photo result.".into());
+    }
+    Ok(data)
+}
+
+#[tauri::command]
+pub async fn link_plant_settings(
+    body: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    if body
+        .as_ref()
+        .is_some_and(|value| !value.is_object() || value.to_string().len() > 2048)
+    {
+        return Err("The plant reminder settings are invalid.".into());
+    }
+    let profile = identity::load_profile()?
+        .ok_or_else(|| "No paired HomePlace server profile was found.".to_string())?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let (base_url, _) = validate_address(&profile.address)?;
+    let endpoint = base_url
+        .join("api/link/plants/settings")
+        .map_err(|_| "Could not create plant settings address.".to_string())?;
+    let client = workspace_http_client(20)?;
+    let request = if let Some(value) = body {
+        client.patch(endpoint).json(&value)
+    } else {
+        client.get(endpoint)
+    };
+    let response = request
+        .bearer_auth(credential.as_str())
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|error| connection_error(&error))?;
+    mobile_api_status(&response, "plants.manage")?;
+    let data: serde_json::Value = read_bounded_json_with_limit(response, 32 * 1024).await?;
+    if !data
+        .get("settings")
+        .is_some_and(serde_json::Value::is_object)
+    {
+        return Err("The server returned invalid plant reminder settings.".into());
     }
     Ok(data)
 }
@@ -1844,16 +2258,25 @@ pub async fn link_change_plant(body: serde_json::Value) -> Result<serde_json::Va
     validate_stored_profile(&profile)?;
     let credential = identity::load_credential(&profile.server_id)?;
     let (base_url, _) = validate_address(&profile.address)?;
-    let endpoint = base_url.join("api/link/plants")
+    let endpoint = base_url
+        .join("api/link/plants")
         .map_err(|_| "Could not create plants API address.".to_string())?;
-    let response = workspace_http_client(20)?.post(endpoint)
+    let response = workspace_http_client(20)?
+        .post(endpoint)
         .header("Accept", "application/json")
-        .bearer_auth(credential.as_str()).json(&body).send().await
+        .bearer_auth(credential.as_str())
+        .json(&body)
+        .send()
+        .await
         .map_err(|error| connection_error(&error))?;
     let conflict = response.status() == reqwest::StatusCode::CONFLICT;
-    if !conflict { mobile_api_status(&response, "plants.manage")?; }
+    if !conflict {
+        mobile_api_status(&response, "plants.manage")?;
+    }
     let data: serde_json::Value = read_bounded_json_with_limit(response, 64 * 1024).await?;
-    if conflict { return Ok(serde_json::json!({ "conflict": true, "plant": data.get("plant") })); }
+    if conflict {
+        return Ok(serde_json::json!({ "conflict": true, "plant": data.get("plant") }));
+    }
     if !data.get("plant").is_some_and(serde_json::Value::is_object) {
         return Err("The HomePlace server returned an invalid plant.".into());
     }
@@ -1938,7 +2361,8 @@ pub async fn link_media_catalog(
     language: String,
 ) -> Result<serde_json::Value, String> {
     let query = query.trim();
-    if query.chars().count() > 120 || query.chars().any(char::is_control)
+    if query.chars().count() > 120
+        || query.chars().any(char::is_control)
         || (!query.is_empty() && query.chars().count() < 2)
         || !matches!(kind.as_str(), "all" | "movie" | "tv")
         || !matches!(category.as_str(), "all" | "anime")
@@ -1952,30 +2376,49 @@ pub async fn link_media_catalog(
     validate_stored_profile(&profile)?;
     let credential = identity::load_credential(&profile.server_id)?;
     let (base_url, _) = validate_address(&profile.address)?;
-    let mut endpoint = base_url.join("api/link/media")
+    let mut endpoint = base_url
+        .join("api/link/media")
         .map_err(|_| "Could not create media catalog API address.".to_string())?;
     {
         let mut params = endpoint.query_pairs_mut();
-        if !query.is_empty() { params.append_pair("q", query); }
-        params.append_pair("kind", &kind).append_pair("category", &category)
-            .append_pair("page", &page.to_string()).append_pair("lang", &language);
+        if !query.is_empty() {
+            params.append_pair("q", query);
+        }
+        params
+            .append_pair("kind", &kind)
+            .append_pair("category", &category)
+            .append_pair("page", &page.to_string())
+            .append_pair("lang", &language);
     }
-    let response = workspace_http_client(25)?.get(endpoint)
+    let response = workspace_http_client(25)?
+        .get(endpoint)
         .header("Accept", "application/json")
-        .bearer_auth(credential.as_str()).send().await
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
         .map_err(|error| connection_error(&error))?;
     mobile_api_status(&response, "media.request")?;
     let data: serde_json::Value = read_bounded_json_with_limit(response, 512 * 1024).await?;
-    if !data.get("configured").is_some_and(serde_json::Value::is_boolean)
-        || !data.get("items").is_some_and(serde_json::Value::is_array) {
+    if !data
+        .get("configured")
+        .is_some_and(serde_json::Value::is_boolean)
+        || !data.get("items").is_some_and(serde_json::Value::is_array)
+    {
         return Err("The HomePlace server returned an invalid media catalog.".into());
     }
     Ok(data)
 }
 
 #[tauri::command]
-pub async fn link_media_details(kind: String, id: u32, language: String) -> Result<serde_json::Value, String> {
-    if !matches!(kind.as_str(), "movie" | "tv") || id == 0 || !matches!(language.as_str(), "ru" | "en") {
+pub async fn link_media_details(
+    kind: String,
+    id: u32,
+    language: String,
+) -> Result<serde_json::Value, String> {
+    if !matches!(kind.as_str(), "movie" | "tv")
+        || id == 0
+        || !matches!(language.as_str(), "ru" | "en")
+    {
         return Err("The media details request is invalid.".into());
     }
     let profile = identity::load_profile()?
@@ -1983,20 +2426,29 @@ pub async fn link_media_details(kind: String, id: u32, language: String) -> Resu
     validate_stored_profile(&profile)?;
     let credential = identity::load_credential(&profile.server_id)?;
     let (base_url, _) = validate_address(&profile.address)?;
-    let mut endpoint = base_url.join(&format!("api/link/media/{kind}/{id}"))
+    let mut endpoint = base_url
+        .join(&format!("api/link/media/{kind}/{id}"))
         .map_err(|_| "Could not create media details API address.".to_string())?;
     endpoint.query_pairs_mut().append_pair("lang", &language);
-    let response = workspace_http_client(25)?.get(endpoint)
+    let response = workspace_http_client(25)?
+        .get(endpoint)
         .header("Accept", "application/json")
-        .bearer_auth(credential.as_str()).send().await
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
         .map_err(|error| connection_error(&error))?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Err("Media details are unavailable on the HomePlace server.".into());
     }
     mobile_api_status(&response, "media.request")?;
     let data: serde_json::Value = read_bounded_json_with_limit(response, 256 * 1024).await?;
-    if !data.get("details").is_some_and(serde_json::Value::is_object)
-        || !data.get("profiles").is_some_and(serde_json::Value::is_array) {
+    if !data
+        .get("details")
+        .is_some_and(serde_json::Value::is_object)
+        || !data
+            .get("profiles")
+            .is_some_and(serde_json::Value::is_array)
+    {
         return Err("The HomePlace server returned invalid media details.".into());
     }
     Ok(data)
@@ -2009,15 +2461,22 @@ pub async fn link_media_catalog_requests() -> Result<serde_json::Value, String> 
     validate_stored_profile(&profile)?;
     let credential = identity::load_credential(&profile.server_id)?;
     let (base_url, _) = validate_address(&profile.address)?;
-    let endpoint = base_url.join("api/link/media/requests")
+    let endpoint = base_url
+        .join("api/link/media/requests")
         .map_err(|_| "Could not create media requests API address.".to_string())?;
-    let response = workspace_http_client(25)?.get(endpoint)
+    let response = workspace_http_client(25)?
+        .get(endpoint)
         .header("Accept", "application/json")
-        .bearer_auth(credential.as_str()).send().await
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
         .map_err(|error| connection_error(&error))?;
     mobile_api_status(&response, "media.request")?;
     let data: serde_json::Value = read_bounded_json_with_limit(response, 256 * 1024).await?;
-    if !data.get("requests").is_some_and(serde_json::Value::is_array) {
+    if !data
+        .get("requests")
+        .is_some_and(serde_json::Value::is_array)
+    {
         return Err("The HomePlace server returned invalid media requests.".into());
     }
     Ok(data)
@@ -2030,9 +2489,15 @@ pub async fn link_create_catalog_request(
     seasons: Option<Vec<u32>>,
     profile_key: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    if !matches!(kind.as_str(), "movie" | "tv") || media_id == 0
-        || seasons.as_ref().is_some_and(|values| values.len() > 100 || values.iter().any(|value| !(1..=100).contains(value)))
-        || profile_key.as_ref().is_some_and(|value| value.len() > 150 || value.chars().any(char::is_control)) {
+    if !matches!(kind.as_str(), "movie" | "tv")
+        || media_id == 0
+        || seasons.as_ref().is_some_and(|values| {
+            values.len() > 100 || values.iter().any(|value| !(1..=100).contains(value))
+        })
+        || profile_key
+            .as_ref()
+            .is_some_and(|value| value.len() > 150 || value.chars().any(char::is_control))
+    {
         return Err("The media request is invalid.".into());
     }
     let profile = identity::load_profile()?
@@ -2040,30 +2505,46 @@ pub async fn link_create_catalog_request(
     validate_stored_profile(&profile)?;
     let credential = identity::load_credential(&profile.server_id)?;
     let (base_url, _) = validate_address(&profile.address)?;
-    let endpoint = base_url.join("api/link/media/requests")
+    let endpoint = base_url
+        .join("api/link/media/requests")
         .map_err(|_| "Could not create media request API address.".to_string())?;
     let mut body = serde_json::json!({ "kind": kind, "mediaId": media_id });
-    if let Some(values) = seasons { body["seasons"] = serde_json::json!(values); }
-    if let Some(value) = profile_key { body["profileKey"] = serde_json::json!(value); }
-    let response = workspace_http_client(30)?.post(endpoint)
+    if let Some(values) = seasons {
+        body["seasons"] = serde_json::json!(values);
+    }
+    if let Some(value) = profile_key {
+        body["profileKey"] = serde_json::json!(value);
+    }
+    let response = workspace_http_client(30)?
+        .post(endpoint)
         .header("Accept", "application/json")
-        .bearer_auth(credential.as_str()).json(&body).send().await
+        .bearer_auth(credential.as_str())
+        .json(&body)
+        .send()
+        .await
         .map_err(|error| connection_error(&error))?;
     mobile_api_status(&response, "media.request")?;
     let accepted = response.status().is_success();
     let data: serde_json::Value = read_bounded_json_with_limit(response, 64 * 1024).await?;
     if !accepted || data.get("ok") != Some(&serde_json::Value::Bool(true)) {
-        return Err(data.get("error").and_then(serde_json::Value::as_str)
+        return Err(data
+            .get("error")
+            .and_then(serde_json::Value::as_str)
             .unwrap_or("HomePlace could not create the media request.")
-            .chars().take(240).collect());
+            .chars()
+            .take(240)
+            .collect());
     }
     Ok(data)
 }
 
 #[tauri::command]
 pub async fn link_media_image(path: String) -> Result<String, String> {
-    if path.len() > 500 || !path.starts_with("/api/media/") || path.contains("..")
-        || path.chars().any(char::is_control) {
+    if path.len() > 500
+        || !path.starts_with("/api/media/")
+        || path.contains("..")
+        || path.chars().any(char::is_control)
+    {
         return Err("The media image address is invalid.".into());
     }
     let profile = identity::load_profile()?
@@ -2071,23 +2552,42 @@ pub async fn link_media_image(path: String) -> Result<String, String> {
     validate_stored_profile(&profile)?;
     let credential = identity::load_credential(&profile.server_id)?;
     let (base_url, _) = validate_address(&profile.address)?;
-    let endpoint = base_url.join(path.trim_start_matches('/'))
+    let endpoint = base_url
+        .join(path.trim_start_matches('/'))
         .map_err(|_| "Could not create media image address.".to_string())?;
     if endpoint.origin() != base_url.origin()
-        || !matches!(endpoint.path(), "/api/media/tmdb-image" | "/api/media/jellyfin-image")
-            && !endpoint.path().starts_with("/api/media/jellyfin-image/") {
+        || !matches!(
+            endpoint.path(),
+            "/api/media/tmdb-image" | "/api/media/jellyfin-image"
+        ) && !endpoint.path().starts_with("/api/media/jellyfin-image/")
+    {
         return Err("The media image address is invalid.".into());
     }
-    let response = workspace_http_client(20)?.get(endpoint)
-        .bearer_auth(credential.as_str()).send().await
+    let response = workspace_http_client(20)?
+        .get(endpoint)
+        .bearer_auth(credential.as_str())
+        .send()
+        .await
         .map_err(|error| connection_error(&error))?;
-    if !response.status().is_success() { return Err("The media image is unavailable.".into()); }
-    let mime = response.headers().get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok()).unwrap_or("").split(';').next().unwrap_or("").to_string();
+    if !response.status().is_success() {
+        return Err("The media image is unavailable.".into());
+    }
+    let mime = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .to_string();
     if !matches!(mime.as_str(), "image/jpeg" | "image/png" | "image/webp") {
         return Err("The media image has an unsupported format.".into());
     }
-    if response.content_length().is_some_and(|size| size > 8 * 1024 * 1024) {
+    if response
+        .content_length()
+        .is_some_and(|size| size > 8 * 1024 * 1024)
+    {
         return Err("The media image is too large.".into());
     }
     let mut body = Vec::new();
@@ -4016,6 +4516,48 @@ fn protocol_error(error: ProtocolError) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plant_photo_validation_rejects_mismatched_or_unsupported_files() {
+        assert_eq!(
+            super::plant_photo_mime(&[0xff, 0xd8, 0xff, 0xe0]),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            super::plant_photo_mime(b"\x89PNG\r\n\x1a\nrest"),
+            Some("image/png")
+        );
+        assert_eq!(
+            super::plant_photo_mime(b"RIFF1234WEBPVP8 "),
+            Some("image/webp")
+        );
+        assert_eq!(super::plant_photo_mime(b"not an image"), None);
+    }
+
+    #[test]
+    fn plant_photo_cache_is_scoped_and_versioned() {
+        let first = super::plant_photo_cache_name("server-a", "device-a", "plant-a", "one");
+        assert_ne!(
+            first,
+            super::plant_photo_cache_name("server-a", "device-b", "plant-a", "one")
+        );
+        assert_ne!(
+            first,
+            super::plant_photo_cache_name("server-a", "device-a", "plant-a", "two")
+        );
+    }
+
+    #[test]
+    fn plant_photo_cache_requires_matching_server_version() {
+        assert!(super::plant_photo_etag_matches(
+            Some("\"photo-a\""),
+            "photo-a"
+        ));
+        assert!(!super::plant_photo_etag_matches(
+            Some("\"photo-b\""),
+            "photo-a"
+        ));
+        assert!(!super::plant_photo_etag_matches(None, "photo-a"));
+    }
     use super::*;
 
     #[test]

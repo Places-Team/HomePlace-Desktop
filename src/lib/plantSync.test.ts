@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { daysUntilWater, photoCacheKey, plantIdFromNotification, safePlantPhotoPath, waterPlantRequest } from "./plantSync";
+import { daysUntilWater, parsePlantReminderSettings, photoCacheKey, plantIdFromNotification, plantSettingsConflict, safePlantPhotoPath, validatePlantPhoto, waterPlantRequest } from "./plantSync";
 
 describe("plant synchronization", () => {
   it("uses local calendar days instead of 24-hour spans around daylight saving changes", () => {
@@ -7,9 +7,9 @@ describe("plant synchronization", () => {
   });
 
   it("isolates cached photos by server, paired device, plant and revision", () => {
-    const first = photoCacheKey("server-a", "device-a", "plant-a", 2);
-    expect(first).not.toBe(photoCacheKey("server-a", "device-b", "plant-a", 2));
-    expect(first).not.toBe(photoCacheKey("server-a", "device-a", "plant-a", 3));
+    const first = photoCacheKey("server-a", "device-a", "plant-a", "photo-v2");
+    expect(first).not.toBe(photoCacheKey("server-a", "device-b", "plant-a", "photo-v2"));
+    expect(first).not.toBe(photoCacheKey("server-a", "device-a", "plant-a", "photo-v3"));
   });
 
   it("accepts only the private photo path of the selected plant", () => {
@@ -34,5 +34,25 @@ describe("plant synchronization", () => {
       revision: 7,
       lastWateredAt: "2026-10-03T09:00:00.000Z",
     });
+  });
+
+  it("rejects unsupported or oversized photos before upload", () => {
+    expect(validatePlantPhoto({ type: "image/png", size: 1024 }, 2048)).toBeNull();
+    expect(validatePlantPhoto({ type: "image/heic", size: 1024 }, 2048)).toBe("unsupported");
+    expect(validatePlantPhoto({ type: "image/jpeg", size: 2049 }, 2048)).toBe("too-large");
+  });
+
+  it("rejects incomplete or malformed account reminder settings", () => {
+    const valid = { enabled: true, app: true, telegram: false, time: "09:00", timeZone: "Europe/Moscow", repeatDays: 2 };
+    expect(parsePlantReminderSettings(valid)).toEqual(valid);
+    expect(parsePlantReminderSettings({ ...valid, repeatDays: 31 })).toBeNull();
+    expect(parsePlantReminderSettings({ ...valid, telegram: "yes" })).toBeNull();
+  });
+
+  it("keeps unsaved account settings when another device changes them", () => {
+    const before = { enabled: true, app: true, telegram: false, time: "09:00", timeZone: "Europe/Moscow", repeatDays: 1 };
+    expect(plantSettingsConflict(before, { ...before, time: "10:00" }, true)).toBe(true);
+    expect(plantSettingsConflict(before, { ...before, time: "10:00" }, false)).toBe(false);
+    expect(plantSettingsConflict(before, { ...before }, true)).toBe(false);
   });
 });

@@ -2,8 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Icon } from "./Icon";
 import type { Language } from "../lib/i18n";
-import { daysUntilWater, waterPlantRequest } from "../lib/plantSync";
+import { daysUntilWater, waterPlantRequest, type PlantFeatures, type SyncedPlant } from "../lib/plantSync";
+import { PlantDetails } from "./PlantDetails";
+import { PlantReminderSettings } from "./PlantReminderSettings";
 import "../styles/home-overview.css";
+import "../styles/plants.css";
 
 type Overview = {
   serverTime: string;
@@ -27,7 +30,6 @@ type Overview = {
 };
 
 type Plant = { id: string; name: string; intervalDays: number; lastWateredAt: string };
-type SyncedPlant = { clientId: string; name: string; species: string; location: string; notes: string; intervalDays: number; lastWateredAt: string; remindersEnabled?: boolean; revision: number; deletedAt: string | null };
 type PlantReply = { plant?: SyncedPlant; conflict?: boolean; existing?: boolean };
 
 function plantsKey(serverId: string) { return `homeplace-desktop-plants-v1:${serverId}`; }
@@ -50,10 +52,12 @@ function formatSpeed(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB/s`;
 }
 
-export function HomeOverview({ serverId, language, onNavigate }: {
+export function HomeOverview({ serverId, language, onNavigate, requestedPlantId, onPlantRequestHandled }: {
   serverId: string;
   language: Language;
   onNavigate: (section: "media" | "monitoring" | "notifications") => void;
+  requestedPlantId?: string | null;
+  onPlantRequestHandled?: () => void;
 }) {
   const ru = language === "ru";
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -61,6 +65,8 @@ export function HomeOverview({ serverId, language, onNavigate }: {
   const [error, setError] = useState<string | null>(null);
   const [localPlants, setLocalPlants] = useState<Plant[]>(() => readPlants(serverId));
   const [syncedPlants, setSyncedPlants] = useState<SyncedPlant[] | null>(null);
+  const [plantFeatures, setPlantFeatures] = useState<PlantFeatures | null>(null);
+  const [selectedPlantId, setSelectedPlantId] = useState<string | null>(null);
   const [plantsBusy, setPlantsBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [plantName, setPlantName] = useState("");
@@ -109,8 +115,27 @@ export function HomeOverview({ serverId, language, onNavigate }: {
     return () => { window.clearTimeout(start); window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
   }, [refreshPlants]);
 
+  useEffect(() => {
+    const start = window.setTimeout(() => {
+      void invoke<PlantFeatures>("link_plant_features")
+        .then(setPlantFeatures)
+        .catch(() => setPlantFeatures(null));
+    }, 0);
+    return () => window.clearTimeout(start);
+  }, [serverId]);
+
   const plants = syncedPlants === null ? localPlants : syncedPlants.filter((item) => !item.deletedAt);
   const unimported = syncedPlants === null ? [] : localPlants.filter((item) => !syncedPlants.some((remote) => remote.clientId === item.id));
+  const selectedPlant = syncedPlants?.find((item) => item.clientId === selectedPlantId && !item.deletedAt);
+
+  useEffect(() => {
+    if (!requestedPlantId || !syncedPlants?.some((item) => item.clientId === requestedPlantId && !item.deletedAt)) return;
+    const start = window.setTimeout(() => {
+      setSelectedPlantId(requestedPlantId);
+      onPlantRequestHandled?.();
+    }, 0);
+    return () => window.clearTimeout(start);
+  }, [requestedPlantId, syncedPlants, onPlantRequestHandled]);
 
   function savePlants(next: Plant[]): boolean {
     try {
@@ -219,12 +244,22 @@ export function HomeOverview({ serverId, language, onNavigate }: {
         {unimported.length > 0 && <button type="button" className="home-overview-link" disabled={plantsBusy} onClick={() => void importLocalPlants()}>{ru ? `Перенести локальные растения (${unimported.length})` : `Import local plants (${unimported.length})`}</button>}
         {plants.length > 0 ? <div className="home-overview-plant-list">{[...plants].sort((a, b) => daysUntilWater(a, today) - daysUntilWater(b, today)).map((plant) => {
           const days = daysUntilWater(plant, today);
-          return <div className="home-overview-plant" key={"clientId" in plant ? plant.clientId : plant.id}><span><b>{plant.name}</b><small>{days < 0 ? (ru ? `Просрочено на ${-days} дн.` : `${-days} days overdue`) : days === 0 ? (ru ? "Полить сегодня" : "Water today") : (ru ? `Через ${days} дн.` : `In ${days} days`)}</small></span>{"clientId" in plant && <button type="button" disabled={plantsBusy} title={ru ? "Включить или выключить напоминания об этом растении" : "Toggle reminders for this plant"} aria-label={`${plant.remindersEnabled === false ? (ru ? "Включить напоминания" : "Enable reminders") : (ru ? "Выключить напоминания" : "Disable reminders")}: ${plant.name}`} aria-pressed={plant.remindersEnabled !== false} onClick={() => void changePlant({ action: "update", clientId: plant.clientId, revision: plant.revision, name: plant.name, species: plant.species, location: plant.location, notes: plant.notes, intervalDays: plant.intervalDays, lastWateredAt: plant.lastWateredAt, remindersEnabled: plant.remindersEnabled === false })}><Icon name="bell" size={15} /></button>}<button type="button" disabled={plantsBusy} onClick={() => { if ("clientId" in plant) void changePlant(waterPlantRequest(plant.clientId, plant.revision, new Date().toISOString())); else savePlants(localPlants.map((item) => item.id === plant.id ? { ...item, lastWateredAt: new Date().toISOString() } : item)); }}>{ru ? "Полито" : "Watered"}</button><button type="button" className="home-overview-remove" disabled={plantsBusy} onClick={() => void removePlant(plant)} aria-label={`${ru ? "Удалить" : "Remove"} ${plant.name}`}><Icon name="trash" size={15} /></button></div>;
+          const remote = "clientId" in plant ? plant : null;
+          const local = "id" in plant ? plant : null;
+          return <div className="home-overview-plant" key={remote?.clientId ?? local?.id}>
+            <span>{remote ? <button type="button" className="home-overview-plant-title" onClick={() => setSelectedPlantId(remote.clientId)}>{plant.name}</button> : <b>{plant.name}</b>}
+              <small>{days < 0 ? (ru ? `Просрочено на ${-days} дн.` : `${-days} days overdue`) : days === 0 ? (ru ? "Полить сегодня" : "Water today") : (ru ? `Через ${days} дн.` : `In ${days} days`)}</small></span>
+            {remote && plantFeatures?.plantReminders && <button type="button" disabled={plantsBusy} title={ru ? "Включить или выключить напоминания об этом растении" : "Toggle reminders for this plant"} aria-label={`${remote.remindersEnabled === false ? (ru ? "Включить напоминания" : "Enable reminders") : (ru ? "Выключить напоминания" : "Disable reminders")}: ${plant.name}`} aria-pressed={remote.remindersEnabled !== false} onClick={() => void changePlant({ action: "update", clientId: remote.clientId, revision: remote.revision, name: remote.name, species: remote.species, location: remote.location, notes: remote.notes, intervalDays: remote.intervalDays, lastWateredAt: remote.lastWateredAt, remindersEnabled: remote.remindersEnabled === false })}><Icon name="bell" size={15} /></button>}
+            <button type="button" disabled={plantsBusy} onClick={() => { if (remote) void changePlant(waterPlantRequest(remote.clientId, remote.revision, new Date().toISOString())); else if (local) savePlants(localPlants.map((item) => item.id === local.id ? { ...item, lastWateredAt: new Date().toISOString() } : item)); }}>{ru ? "Полито" : "Watered"}</button>
+            <button type="button" className="home-overview-remove" disabled={plantsBusy} onClick={() => void removePlant(plant)} aria-label={`${ru ? "Удалить" : "Remove"} ${plant.name}`}><Icon name="trash" size={15} /></button>
+          </div>;
         })}</div> : <p className="home-overview-empty">{ru ? "Добавьте растение и интервал полива." : "Add a plant and its watering interval."}</p>}
         {syncedPlants === null && lastDeletedPlant && <p className="home-overview-undo" role="status">{ru ? `«${lastDeletedPlant.name}» удалено` : `${lastDeletedPlant.name} removed`} <button type="button" onClick={() => { if (savePlants([...localPlants, lastDeletedPlant])) setLastDeletedPlant(null); }}>{ru ? "Вернуть" : "Undo"}</button></p>}
         <form className="home-overview-plant-form" onSubmit={(event) => void addPlant(event)}><input aria-label={ru ? "Название растения" : "Plant name"} placeholder={ru ? "Название растения" : "Plant name"} value={plantName} onChange={(event) => setPlantName(event.target.value)} maxLength={80} required /><label>{ru ? "Каждые" : "Every"}<input type="number" min={1} max={365} value={intervalDays} onChange={(event) => setIntervalDays(Number(event.target.value))} />{ru ? "дн." : "days"}</label><button type="submit" disabled={plantsBusy || !plantName.trim() || plants.length >= (syncedPlants === null ? 50 : 500)}><Icon name="plus" size={16} />{ru ? "Добавить" : "Add"}</button></form>
+        {syncedPlants !== null && plantFeatures?.plantReminders && <PlantReminderSettings language={language} />}
         {plantsError && <p className="home-overview-error" role="alert">{plantsError}</p>}
       </section>
     </div>
+    {selectedPlant && plantFeatures && <PlantDetails plant={selectedPlant} features={plantFeatures} language={language} onClose={() => setSelectedPlantId(null)} onChanged={refreshPlants} />}
   </div>;
 }

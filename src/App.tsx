@@ -361,6 +361,7 @@ export function App() {
 
 function MainApp() {
   const [activeSection, setActiveSection] = useState<AppSection>("overview");
+  const [requestedPlantId, setRequestedPlantId] = useState<string | null>(null);
   const [transferMode, setTransferMode] = useState<"devices" | "exchange">("devices");
   const [exchangeDraft, setExchangeDraft] = useState<{ revision: number; serverId: string | null; content: ExchangeContent } | null>(null);
   const [sidebarPinned, setSidebarPinned] = useState(() => window.localStorage.getItem("homeplace-sidebar-pinned") === "1");
@@ -2299,7 +2300,7 @@ function MainApp() {
               <span><Icon name="monitoring" size={18} /></span><b>{ui.nav.monitoring}</b><small>{language === "ru" ? "Состояние сервера" : "Server health"}</small>
             </button>
           </section>
-          <HomeOverview key={activeServerId} serverId={activeServerId} language={language} onNavigate={setActiveSection} />
+          <HomeOverview key={activeServerId} serverId={activeServerId} language={language} onNavigate={setActiveSection} requestedPlantId={requestedPlantId} onPlantRequestHandled={() => setRequestedPlantId(null)} />
           </>}
         </section>
       )}
@@ -2699,7 +2700,7 @@ function MainApp() {
             <label className="settings-row"><span><b>{ui.notifications.desktop}</b><small>{ui.notifications.desktopHint}</small></span><input type="checkbox" checked={systemNotificationsEnabled} disabled={!systemNotificationsLoaded || systemNotificationsBusy || !activeServerId} onChange={(event) => void updateSystemNotifications(event.target.checked)} /></label>
             {systemNotificationsError && <p className="setting-error" role="alert">{systemNotificationsError}</p>}
           </article>
-          <NotificationHistory key={activeServerId ?? "unpaired"} language={language} activeServerId={activeServerId} />
+          <NotificationHistory key={activeServerId ?? "unpaired"} language={language} activeServerId={activeServerId} onOpenPlant={(id) => { setRequestedPlantId(id); setActiveSection("overview"); }} />
           <TelegramStatus key={activeServerId ?? "unpaired"} activeServerId={activeServerId} language={language} />
         </section>
       )}
