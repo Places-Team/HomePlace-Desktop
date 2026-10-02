@@ -41,6 +41,8 @@
 .home-overview-plant small { color: var(--muted); font-size: 11px; }
 .home-overview-plant button, .home-overview-plant-form button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--panel-strong); padding: 7px 9px; color: var(--text); font-size: 12px; }
 .home-overview-plant button:hover, .home-overview-plant-form button:hover { border-color: var(--accent); }
+.home-overview-plant button[aria-pressed="false"] { color: var(--muted); background: transparent; }
+.home-overview-plant button[aria-pressed="true"] { color: var(--accent-strong); }
 .home-overview-plant .home-overview-remove { border-color: transparent; background: transparent; color: var(--muted); }
 .home-overview-plant-form { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; border-top: 1px solid var(--line); margin-top: 12px; padding-top: 14px; }
 .home-overview-plant-form > input { min-width: 125px; flex: 1; }

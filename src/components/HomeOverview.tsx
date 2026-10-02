@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Icon } from "./Icon";
 import type { Language } from "../lib/i18n";
+import { daysUntilWater, waterPlantRequest } from "../lib/plantSync";
 import "../styles/home-overview.css";
 
 type Overview = {
@@ -26,7 +27,7 @@ type Overview = {
 };
 
 type Plant = { id: string; name: string; intervalDays: number; lastWateredAt: string };
-type SyncedPlant = { clientId: string; name: string; species: string; location: string; notes: string; intervalDays: number; lastWateredAt: string; revision: number; deletedAt: string | null };
+type SyncedPlant = { clientId: string; name: string; species: string; location: string; notes: string; intervalDays: number; lastWateredAt: string; remindersEnabled?: boolean; revision: number; deletedAt: string | null };
 type PlantReply = { plant?: SyncedPlant; conflict?: boolean; existing?: boolean };
 
 function plantsKey(serverId: string) { return `homeplace-desktop-plants-v1:${serverId}`; }
@@ -42,12 +43,6 @@ function readPlants(serverId: string): Plant[] {
       typeof item.lastWateredAt === "string" && Number.isFinite(Date.parse(item.lastWateredAt))
     ).slice(0, 50);
   } catch { return []; }
-}
-
-function daysUntilWater(plant: Pick<Plant, "intervalDays" | "lastWateredAt">, today: Date): number {
-  const last = new Date(plant.lastWateredAt);
-  const due = Date.UTC(last.getFullYear(), last.getMonth(), last.getDate() + plant.intervalDays);
-  return Math.round((due - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / 86_400_000);
 }
 
 function formatSpeed(bytes: number): string {
@@ -224,7 +219,7 @@ export function HomeOverview({ serverId, language, onNavigate }: {
         {unimported.length > 0 && <button type="button" className="home-overview-link" disabled={plantsBusy} onClick={() => void importLocalPlants()}>{ru ? `Перенести локальные растения (${unimported.length})` : `Import local plants (${unimported.length})`}</button>}
         {plants.length > 0 ? <div className="home-overview-plant-list">{[...plants].sort((a, b) => daysUntilWater(a, today) - daysUntilWater(b, today)).map((plant) => {
           const days = daysUntilWater(plant, today);
-          return <div className="home-overview-plant" key={"clientId" in plant ? plant.clientId : plant.id}><span><b>{plant.name}</b><small>{days < 0 ? (ru ? `Просрочено на ${-days} дн.` : `${-days} days overdue`) : days === 0 ? (ru ? "Полить сегодня" : "Water today") : (ru ? `Через ${days} дн.` : `In ${days} days`)}</small></span><button type="button" disabled={plantsBusy} onClick={() => { if ("clientId" in plant) void changePlant({ action: "update", clientId: plant.clientId, revision: plant.revision, name: plant.name, species: plant.species, location: plant.location, notes: plant.notes, intervalDays: plant.intervalDays, lastWateredAt: new Date().toISOString() }); else savePlants(localPlants.map((item) => item.id === plant.id ? { ...item, lastWateredAt: new Date().toISOString() } : item)); }}>{ru ? "Полито" : "Watered"}</button><button type="button" className="home-overview-remove" disabled={plantsBusy} onClick={() => void removePlant(plant)} aria-label={`${ru ? "Удалить" : "Remove"} ${plant.name}`}><Icon name="trash" size={15} /></button></div>;
+          return <div className="home-overview-plant" key={"clientId" in plant ? plant.clientId : plant.id}><span><b>{plant.name}</b><small>{days < 0 ? (ru ? `Просрочено на ${-days} дн.` : `${-days} days overdue`) : days === 0 ? (ru ? "Полить сегодня" : "Water today") : (ru ? `Через ${days} дн.` : `In ${days} days`)}</small></span>{"clientId" in plant && <button type="button" disabled={plantsBusy} title={ru ? "Включить или выключить напоминания об этом растении" : "Toggle reminders for this plant"} aria-label={`${plant.remindersEnabled === false ? (ru ? "Включить напоминания" : "Enable reminders") : (ru ? "Выключить напоминания" : "Disable reminders")}: ${plant.name}`} aria-pressed={plant.remindersEnabled !== false} onClick={() => void changePlant({ action: "update", clientId: plant.clientId, revision: plant.revision, name: plant.name, species: plant.species, location: plant.location, notes: plant.notes, intervalDays: plant.intervalDays, lastWateredAt: plant.lastWateredAt, remindersEnabled: plant.remindersEnabled === false })}><Icon name="bell" size={15} /></button>}<button type="button" disabled={plantsBusy} onClick={() => { if ("clientId" in plant) void changePlant(waterPlantRequest(plant.clientId, plant.revision, new Date().toISOString())); else savePlants(localPlants.map((item) => item.id === plant.id ? { ...item, lastWateredAt: new Date().toISOString() } : item)); }}>{ru ? "Полито" : "Watered"}</button><button type="button" className="home-overview-remove" disabled={plantsBusy} onClick={() => void removePlant(plant)} aria-label={`${ru ? "Удалить" : "Remove"} ${plant.name}`}><Icon name="trash" size={15} /></button></div>;
         })}</div> : <p className="home-overview-empty">{ru ? "Добавьте растение и интервал полива." : "Add a plant and its watering interval."}</p>}
         {syncedPlants === null && lastDeletedPlant && <p className="home-overview-undo" role="status">{ru ? `«${lastDeletedPlant.name}» удалено` : `${lastDeletedPlant.name} removed`} <button type="button" onClick={() => { if (savePlants([...localPlants, lastDeletedPlant])) setLastDeletedPlant(null); }}>{ru ? "Вернуть" : "Undo"}</button></p>}
         <form className="home-overview-plant-form" onSubmit={(event) => void addPlant(event)}><input aria-label={ru ? "Название растения" : "Plant name"} placeholder={ru ? "Название растения" : "Plant name"} value={plantName} onChange={(event) => setPlantName(event.target.value)} maxLength={80} required /><label>{ru ? "Каждые" : "Every"}<input type="number" min={1} max={365} value={intervalDays} onChange={(event) => setIntervalDays(Number(event.target.value))} />{ru ? "дн." : "days"}</label><button type="submit" disabled={plantsBusy || !plantName.trim() || plants.length >= (syncedPlants === null ? 50 : 500)}><Icon name="plus" size={16} />{ru ? "Добавить" : "Add"}</button></form>
