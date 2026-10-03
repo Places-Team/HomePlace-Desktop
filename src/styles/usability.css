@@ -172,3 +172,12 @@ html[data-theme="light"] .app-content button:disabled { color: var(--muted); opa
   .sidebar-nav button:hover, .sidebar-nav button:active,
   .overview-start .primary-action:hover svg { transform: none; }
 }
+/* The tray inbox remains independent of the outgoing draft. */
+.quick-share-incoming { padding-bottom: 16px; border-bottom: 1px solid currentColor; }
+.quick-share-incoming h3 { margin: 0 0 12px; font-size: 17px; }
+.quick-share-incoming article { padding: 12px 0; }
+.quick-share-incoming details { margin: 8px 0; font-size: 14px; }
+.quick-share-incoming details p { overflow-wrap: anywhere; margin: 6px 0; }
+.quick-share-incoming article > div { display: flex; gap: 8px; }
+.quick-share-incoming button { min-height: 40px; padding: 8px 14px; border-radius: 10px; cursor: pointer; }
+.quick-share-incoming button:disabled { cursor: wait; opacity: .55; }

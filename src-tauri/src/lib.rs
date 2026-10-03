@@ -278,6 +278,7 @@ pub fn run() {
             link::client::list_completed_reminders,
             link::client::delete_reminder,
             link::client::resolve_share_offer,
+            link::client::resolve_file_offers,
             link::client::request_heartbeat,
             link::client::disconnect_device
         ])

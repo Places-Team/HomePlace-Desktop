@@ -888,6 +888,10 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
                 .await;
                 let delay = match result {
                     Ok(status) => {
+                        // Discover batch offers even when the main window is closed.
+                        if let Ok(batches) = super::batches::list_share_batches(app.clone()).await {
+                            let _ = app.emit("link-incoming-batches", batches);
+                        }
                         failures = 0;
                         crate::tray::set_connection_state(
                             &app,
@@ -3360,10 +3364,14 @@ fn sync_share_offers(
         .collect();
     let active_ids: HashSet<&str> = parsed.iter().map(|offer| offer.id.as_str()).collect();
     let mut new_offers = Vec::new();
+    let had_pending_files;
     {
         let mut stored = offers
             .lock()
             .map_err(|_| "Could not access pending HomePlace offers.".to_string())?;
+        had_pending_files = stored.values().any(|offer| {
+            offer.server_id == profile.server_id && matches!(offer.content, ShareContent::File(_))
+        });
         stored.retain(|_, offer| {
             offer.server_id != profile.server_id || active_ids.contains(offer.id.as_str())
         });
@@ -3376,7 +3384,38 @@ fn sync_share_offers(
         }
     }
 
-    for offer in new_offers {
+    if !new_offers.is_empty()
+        && (!had_pending_files
+            || new_offers
+                .iter()
+                .any(|offer| !matches!(offer.content, ShareContent::File(_))))
+    {
+        crate::tray::show_quick_share_from_extension(app);
+    }
+    let file_count = new_offers
+        .iter()
+        .filter(|offer| matches!(offer.content, ShareContent::File(_)))
+        .count();
+    if file_count > 0
+        && !had_pending_files
+        && identity::system_notifications_enabled(&profile.server_id).unwrap_or(false)
+    {
+        let _ = app
+            .notification()
+            .builder()
+            .title("HomePlace Link · Incoming files")
+            .body(format!(
+                "{file_count} new file(s). Accept or decline them together in Quick Share."
+            ))
+            .show();
+    }
+    for offer in new_offers
+        .into_iter()
+        .filter(|offer| !matches!(offer.content, ShareContent::File(_)))
+    {
+        if !identity::system_notifications_enabled(&profile.server_id).unwrap_or(false) {
+            continue;
+        }
         let (title, body) = share_offer_notification(&offer);
         let _ = app.notification().builder().title(title).body(body).show();
     }
@@ -3393,7 +3432,7 @@ fn share_offer_notification(offer: &PendingShareOffer) -> (String, String) {
     (
         format!("HomePlace Link · {title}"),
         format!(
-            "{subject} from {} is waiting for approval. Open HomePlace to accept it.",
+            "{subject} from {} is waiting for approval in Quick Share.",
             offer.source_name,
         ),
     )
@@ -3562,7 +3601,7 @@ pub async fn resolve_share_offer(
             .write_text(text)
             .map_err(|_| "The text could not be copied to clipboard.".to_string())?,
         ("save", ShareContent::File(file)) => {
-            if !save_received_file(&app, &profile, credential.as_str(), file).await? {
+            if !save_received_file(&app, &profile, credential.as_str(), file, None).await? {
                 return offer_summaries(&service.offers, &profile.server_id);
             }
         }
@@ -3580,23 +3619,98 @@ pub async fn resolve_share_offer(
     offer_summaries(&service.offers, &profile.server_id)
 }
 
+/// Consent is limited to the explicit snapshot supplied by Quick Share.
+#[tauri::command]
+pub async fn resolve_file_offers(
+    app: AppHandle,
+    event_ids: Vec<String>,
+    accept: bool,
+    service: State<'_, HeartbeatService>,
+) -> Result<Vec<ShareOfferSummary>, String> {
+    if event_ids.is_empty()
+        || event_ids.len() > 500
+        || event_ids.iter().any(|id| !safe_identifier(id))
+    {
+        return Err("Invalid incoming file selection.".into());
+    }
+    let profile = identity::load_profile()?.ok_or("No paired HomePlace server.")?;
+    validate_stored_profile(&profile)?;
+    let credential = identity::load_credential(&profile.server_id)?;
+    let snapshot = {
+        let stored = service
+            .offers
+            .lock()
+            .map_err(|_| "Could not read incoming files.")?;
+        let mut snapshot = Vec::new();
+        let mut seen = HashSet::new();
+        for id in event_ids {
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let offer = stored
+                .get(&offer_key(&profile.server_id, &id))
+                .cloned()
+                .ok_or("An incoming file is no longer available. Refresh and retry.")?;
+            if !matches!(offer.content, ShareContent::File(_)) {
+                return Err("Only file offers can be grouped.".into());
+            }
+            snapshot.push(offer);
+        }
+        snapshot
+    };
+    let directory = if accept {
+        let Some(selected) = app.dialog().file().blocking_pick_folder() else {
+            return offer_summaries(&service.offers, &profile.server_id);
+        };
+        Some(
+            std::fs::canonicalize(selected.into_path().map_err(|_| "Choose a local folder.")?)
+                .map_err(|_| "Folder unavailable.")?,
+        )
+    } else {
+        None
+    };
+    for offer in snapshot {
+        if let (Some(directory), ShareContent::File(file)) = (&directory, &offer.content) {
+            save_received_file(&app, &profile, credential.as_str(), file, Some(directory)).await?;
+        }
+        heartbeat_request(&profile, credential.as_str(), &[offer.id.clone()]).await?;
+        service
+            .offers
+            .lock()
+            .map_err(|_| "Could not update incoming files.")?
+            .remove(&offer_key(&profile.server_id, &offer.id));
+    }
+    service.wake();
+    offer_summaries(&service.offers, &profile.server_id)
+}
+
 async fn save_received_file(
     app: &AppHandle,
     profile: &StoredProfile,
     credential: &str,
     offer: &FileOffer,
+    folder: Option<&Path>,
 ) -> Result<bool, String> {
-    let Some(selected) = app
-        .dialog()
-        .file()
-        .set_file_name(&offer.filename)
-        .blocking_save_file()
-    else {
-        return Ok(false);
+    let selected;
+    let grouped;
+    let destination = if let Some(folder) = folder {
+        // Unique names prevent replacing existing files, including duplicate filenames.
+        grouped = folder.join(format!("{}-{}", uuid::Uuid::new_v4(), offer.filename));
+        grouped.as_path()
+    } else {
+        let Some(picked) = app
+            .dialog()
+            .file()
+            .set_file_name(&offer.filename)
+            .blocking_save_file()
+        else {
+            return Ok(false);
+        };
+        selected = picked;
+        selected
+            .as_path()
+            .ok_or_else(|| "Only local file destinations are supported.".to_string())?
     };
-    let destination = selected
-        .as_path()
-        .ok_or_else(|| "Only local file destinations are supported.".to_string())?;
     let (base_url, _) = validate_address(&profile.address)?;
     let endpoint = base_url
         .join(&format!("api/link/mobile/share/file/{}", offer.transfer_id))
@@ -3681,14 +3795,28 @@ async fn save_received_file(
             return Err("The shared file failed its integrity check.".to_string());
         }
         #[cfg(target_os = "windows")]
-        if destination.exists() {
+        if folder.is_none() && destination.exists() {
             tokio::fs::remove_file(destination)
                 .await
                 .map_err(|_| "The selected Windows file could not be replaced.".to_string())?;
         }
-        tokio::fs::rename(&temporary, destination)
-            .await
-            .map_err(|_| "The shared file could not be moved to its destination.".to_string())?;
+        if folder.is_some() {
+            tokio::fs::hard_link(&temporary, destination)
+                .await
+                .map_err(|_| {
+                    "The shared file could not be saved without replacing an existing file."
+                        .to_string()
+                })?;
+            tokio::fs::remove_file(&temporary)
+                .await
+                .map_err(|_| "The temporary file could not be removed.".to_string())?;
+        } else {
+            tokio::fs::rename(&temporary, destination)
+                .await
+                .map_err(|_| {
+                    "The shared file could not be moved to its destination.".to_string()
+                })?;
+        }
         #[cfg(unix)]
         if let Ok(directory) = tokio::fs::File::open(parent).await {
             let _ = directory.sync_all().await;
@@ -4922,7 +5050,7 @@ mod tests {
         assert_eq!(title, "HomePlace Link · Incoming file");
         assert!(body.contains("HomePlace.apk"));
         assert!(body.contains("Android phone"));
-        assert!(body.contains("Open HomePlace"));
+        assert!(body.contains("Quick Share"));
     }
 
     #[test]

@@ -16,6 +16,7 @@ import { copy, type Language } from "./lib/i18n";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
 import { fileLimitLabel, useFileTransferLimit } from "./lib/useFileTransferLimit";
 import { QuickShareLifecycle } from "./lib/quickShareLifecycle";
+import { groupIncomingFiles } from "./lib/incomingShares";
 
 type ConnectionState =
   | "not-configured"
@@ -3148,6 +3149,8 @@ function ShareComposer({ language }: { language: Language }) {
 }
 
 function QuickShareWindow() {
+  const [incoming, setIncoming] = useState<ShareOfferSummary[]>([]);
+  const [incomingBatches, setIncomingBatches] = useState<ShareBatch[]>([]);
   const fileLimit = useFileTransferLimit();
   const [language] = useState<Language>(() => {
     const saved = window.localStorage.getItem("homeplace-language");
@@ -3197,6 +3200,46 @@ function QuickShareWindow() {
       .catch((reason) => setError(errorMessage(reason)))
       .finally(() => setTargetsLoading(false));
   }, []);
+
+  useEffect(() => {
+    const stops: (() => void)[] = [];
+    let disposed = false;
+    const subscribe = async () => {
+      for (const stop of await Promise.all([
+        listen<HeartbeatUpdate>("link-heartbeat", ({ payload: update }) => {
+          if (update.status === "connected") setIncoming(update.offers);
+        }),
+        listen<ShareBatch[]>("link-incoming-batches", ({ payload: batches }) => setIncomingBatches(batches)),
+      ])) {
+        if (disposed) stop(); else stops.push(stop);
+      }
+    };
+    void subscribe();
+    return () => { disposed = true; stops.forEach(stop => stop()); };
+  }, []);
+
+  async function receiveFiles(ids: string[], accept: boolean) {
+    if (busyRef.current) return;
+    busyRef.current = "incoming";
+    setBusy("incoming");
+    setError(null);
+    try {
+      setIncoming(await invoke<ShareOfferSummary[]>("resolve_file_offers", { eventIds: [...ids], accept }));
+    } catch (reason) { setError(errorMessage(reason)); }
+    finally { busyRef.current = null; setBusy(null); }
+  }
+
+  async function receiveBatch(batch: ShareBatch, accept: boolean) {
+    if (busyRef.current) return;
+    busyRef.current = batch.id;
+    setBusy(batch.id);
+    setError(null);
+    try {
+      await invoke(accept ? (batch.status === "accepted" ? "resume_received_batch" : "accept_share_batch") : "reject_share_batch", { batchId: batch.id });
+      setIncomingBatches(await invoke<ShareBatch[]>("list_share_batches"));
+    } catch (reason) { setError(errorMessage(reason)); }
+    finally { busyRef.current = null; setBusy(null); }
+  }
 
   const stageText = useCallback((value: string) => {
     if (busyRef.current) return;
@@ -3453,6 +3496,20 @@ function QuickShareWindow() {
           <button type="button" disabled={busy !== null} aria-label={language === "ru" ? "Закрыть быструю отправку" : "Close quick share"} onClick={dismissShelf}>×</button>
         </div>}
         {expanded && <div className="quick-share-panel">
+          {(incoming.some(offer => offer.kind === "file") || incomingBatches.some(batch => batch.status === "offered" || batch.status === "accepted")) && <section className="quick-share-incoming" aria-label={language === "ru" ? "Входящие файлы" : "Incoming files"}>
+            <h3>{language === "ru" ? "Входящие файлы" : "Incoming files"}</h3>
+            {groupIncomingFiles(incoming).map(group => <article key={group.sourceName}>
+              <b>{group.sourceName} · {group.files.length} {language === "ru" ? "файл(ов)" : "file(s)"}</b>
+              <details><summary>{language === "ru" ? "Посмотреть файлы" : "Review files"}</summary>{group.files.map(file => <p key={file.id}>{file.filename}</p>)}</details>
+              <div><button disabled={busy !== null} onClick={() => void receiveFiles(group.files.map(file => file.id), true)}>{language === "ru" ? "Принять всё…" : "Accept all…"}</button><button disabled={busy !== null} onClick={() => void receiveFiles(group.files.map(file => file.id), false)}>{language === "ru" ? "Отклонить" : "Decline"}</button></div>
+            </article>)}
+            {incomingBatches.filter(batch => batch.status === "offered" || batch.status === "accepted").map(batch => <article key={batch.id}>
+              <b>{batch.files.length} {language === "ru" ? "файл(ов) в пакете" : "files in batch"}</b>
+              <details><summary>{language === "ru" ? "Посмотреть файлы" : "Review files"}</summary>{batch.files.map(file => <p key={file.id}>{file.filename}</p>)}</details>
+              <div><button disabled={busy !== null} onClick={() => void receiveBatch(batch, true)}>{batch.status === "accepted" ? (language === "ru" ? "Продолжить загрузку" : "Resume download") : (language === "ru" ? "Принять всё…" : "Accept all…")}</button>{batch.status === "offered" && <button disabled={busy !== null} onClick={() => void receiveBatch(batch, false)}>{language === "ru" ? "Отклонить" : "Decline"}</button>}</div>
+            </article>)}
+            {busy && <p role="status">{language === "ru" ? "Обрабатываем передачу…" : "Processing transfer…"}</p>}
+          </section>}
           <div className="quick-share-copy">
             <b>{dragging
               ? (language === "ru" ? "Отпустите — файл останется на полке" : "Drop it — the file will stay on the shelf")
