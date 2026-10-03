@@ -64,11 +64,12 @@ impl HeartbeatService {
 #[serde(rename_all = "camelCase")]
 pub struct VerifiedServer {
     address: String,
-    server_id: String,
+    pub(crate) server_id: String,
     server_name: String,
     realtime: bool,
     reduced_security: bool,
     max_file_bytes: Option<u64>,
+    pub(crate) file_batches: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -506,6 +507,7 @@ pub async fn verify_server(address: String) -> Result<VerifiedServer, String> {
         realtime: validated.realtime,
         reduced_security,
         max_file_bytes: info.limits.map(|limits| limits.max_file_bytes),
+        file_batches: info.features.file_batches,
     })
 }
 
@@ -673,6 +675,7 @@ pub async fn poll_pairing(app: AppHandle, server_id: String) -> Result<PairingSt
                 address: pending.address,
                 device_id: device_id.clone(),
                 device_name: pending.device_name,
+                file_batch_approved: true,
             })?;
             crate::tray::refresh_menu(&app);
             identity::delete_pending(&server_id)?;
@@ -3194,6 +3197,27 @@ mod clipboard_retry_tests {
     }
 }
 
+#[cfg(test)]
+mod heartbeat_upgrade_tests {
+    use super::*;
+
+    #[test]
+    fn heartbeat_does_not_silently_add_unapproved_capabilities() {
+        let payload = heartbeat_payload(&[]);
+        assert_eq!(payload["protocol"], PROTOCOL_MAX);
+        assert!(payload.get("capabilities").is_none());
+    }
+}
+
+fn heartbeat_payload(acknowledged_event_ids: &[String]) -> serde_json::Value {
+    // The pairing approval is the capability baseline. An older pairing must not
+    // acquire newly added permissions merely because Desktop was updated.
+    serde_json::json!({
+        "protocol": PROTOCOL_MAX,
+        "acknowledgedEventIds": acknowledged_event_ids,
+    })
+}
+
 async fn heartbeat_request(
     profile: &StoredProfile,
     credential: &str,
@@ -3207,11 +3231,7 @@ async fn heartbeat_request(
         .post(endpoint)
         .header("Accept", "application/json")
         .bearer_auth(credential)
-        .json(&serde_json::json!({
-            "protocol": PROTOCOL_MAX,
-            "capabilities": initial_capabilities(),
-            "acknowledgedEventIds": acknowledged_event_ids
-        }))
+        .json(&heartbeat_payload(acknowledged_event_ids))
         .send()
         .await
         .map_err(|error| connection_error(&error))?;
@@ -4239,7 +4259,7 @@ fn workspace_http_client(timeout_seconds: u64) -> Result<Client, String> {
         .map_err(|_| "Could not initialise the server workspace connection.".to_string())
 }
 
-fn file_transfer_client() -> Result<Client, String> {
+pub(crate) fn file_transfer_client() -> Result<Client, String> {
     Client::builder()
         .redirect(Policy::none())
         .connect_timeout(Duration::from_secs(4))
@@ -4292,7 +4312,7 @@ fn safe_identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
-fn validate_stored_profile(profile: &StoredProfile) -> Result<(), String> {
+pub(crate) fn validate_stored_profile(profile: &StoredProfile) -> Result<(), String> {
     if uuid::Uuid::parse_str(&profile.server_id).is_err()
         || !safe_identifier(&profile.device_id)
         || bounded_device_name(&profile.server_name).is_err()
@@ -4342,7 +4362,7 @@ fn validate_server_time(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_success(response: &Response, operation: &str) -> Result<(), String> {
+pub(crate) fn ensure_success(response: &Response, operation: &str) -> Result<(), String> {
     if response.status().is_redirection() {
         return Err(format!("The server redirected the {operation} request."));
     }
@@ -4399,11 +4419,13 @@ fn pairing_rejection_message(code: Option<&str>) -> &'static str {
     }
 }
 
-async fn read_bounded_json<T: DeserializeOwned>(response: Response) -> Result<T, String> {
+pub(crate) async fn read_bounded_json<T: DeserializeOwned>(
+    response: Response,
+) -> Result<T, String> {
     read_bounded_json_with_limit(response, MAX_RESPONSE_BYTES).await
 }
 
-async fn read_bounded_json_with_limit<T: DeserializeOwned>(
+pub(crate) async fn read_bounded_json_with_limit<T: DeserializeOwned>(
     response: Response,
     limit: usize,
 ) -> Result<T, String> {
@@ -4428,7 +4450,7 @@ async fn read_bounded_json_with_limit<T: DeserializeOwned>(
         .map_err(|_| "The server returned an invalid Link API response.".to_string())
 }
 
-fn validate_address(input: &str) -> Result<(Url, bool), String> {
+pub(crate) fn validate_address(input: &str) -> Result<(Url, bool), String> {
     let trimmed = input.trim();
     let mut url = Url::parse(trimmed)
         .map_err(|_| "Enter a complete address starting with http:// or https://.".to_string())?;
@@ -4637,6 +4659,7 @@ mod tests {
             address: "https://home.example.net".into(),
             device_id: "device_123".into(),
             device_name: "Studio Mac".into(),
+            file_batch_approved: false,
         };
         let mut heartbeat = HeartbeatEnvelope {
             protocol: PROTOCOL_MAX,

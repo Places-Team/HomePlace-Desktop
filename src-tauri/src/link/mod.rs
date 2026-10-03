@@ -1,3 +1,4 @@
+pub mod batches;
 pub mod capabilities;
 pub mod client;
 pub mod identity;

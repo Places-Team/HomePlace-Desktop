@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { FormEvent, Fragment, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { FormEvent, Fragment, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./components/Icon";
 import { IdeasBoard } from "./components/IdeasBoard";
 import { HomeOverview } from "./components/HomeOverview";
@@ -15,6 +15,7 @@ import { exchangeExpiryOptions, exchangeGateway } from "./lib/exchangeGateway";
 import { copy, type Language } from "./lib/i18n";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
 import { fileLimitLabel, useFileTransferLimit } from "./lib/useFileTransferLimit";
+import { QuickShareLifecycle } from "./lib/quickShareLifecycle";
 
 type ConnectionState =
   | "not-configured"
@@ -58,6 +59,7 @@ type ConnectionProfile = {
   address: string;
   deviceId: string;
   deviceName: string;
+  fileBatchApproved?: boolean;
 };
 
 type ConnectionProfiles = {
@@ -143,6 +145,26 @@ type FileTransferProgress = {
   transferredBytes: number;
   totalBytes: number;
 };
+
+type FileBatchProgress = {
+  batchId: string;
+  fileName: string;
+  fileIndex: number;
+  fileCount: number;
+  transferredBytes: number;
+  totalBytes: number;
+};
+
+type ShareBatch = {
+  id: string;
+  status: "assembling" | "offered" | "accepted" | "completed" | "rejected" | "canceled";
+  sourceDeviceId: string;
+  targetDeviceId: string;
+  expiresAt: string;
+  files: { id: string; filename: string; size: number; received: boolean; downloadedBytes: number }[];
+};
+
+type LocalBatchSummary = { requestKey: string; batchId: string | null; targetDeviceId: string; fileCount: number; sending: boolean };
 
 type ActiveTransferProgress = FileTransferProgress & {
   fileIndex: number;
@@ -350,6 +372,15 @@ function visibleCalendarRange(monthOffset: number): { from: string; to: string }
   return { from: start.toISOString(), to: end.toISOString() };
 }
 
+function accountDeviceIcon(platformName: string): IconName {
+  const value = platformName.toLowerCase();
+  if (value.includes("android")) return "android";
+  if (value.includes("mac") || value.includes("ios")) return "apple";
+  if (value.includes("win")) return "windows";
+  if (value.includes("linux")) return "linux";
+  return "devices";
+}
+
 export function App() {
   const windowLabel = isTauriRuntime ? getCurrentWindow().label : "main";
   useLayoutEffect(() => {
@@ -392,6 +423,10 @@ function MainApp() {
   const [deliveredNotifications, setDeliveredNotifications] = useState(0);
   const [notificationFailures, setNotificationFailures] = useState(0);
   const [offers, setOffers] = useState<ShareOfferSummary[]>([]);
+  const [shareBatches, setShareBatches] = useState<ShareBatch[]>([]);
+  const [localBatches, setLocalBatches] = useState<LocalBatchSummary[]>([]);
+  const [batchBusy, setBatchBusy] = useState<string | null>(null);
+  const [batchError, setBatchError] = useState<string | null>(null);
   const [offerBusy, setOfferBusy] = useState<string | null>(null);
   const [offerError, setOfferError] = useState<string | null>(null);
   const [dismissedOfferId, setDismissedOfferId] = useState<string | null>(null);
@@ -771,6 +806,29 @@ function MainApp() {
 
     return () => window.clearTimeout(timer);
   }, [pairing, pollAttempt, server, state]);
+
+  useEffect(() => {
+    if (!isTauriRuntime || !activeServerId) return;
+    let cancelled = false;
+    async function reload() {
+      try {
+        const [incoming, pending] = await Promise.all([
+          invoke<ShareBatch[]>("list_share_batches"),
+          invoke<LocalBatchSummary[]>("list_local_share_batches"),
+        ]);
+        if (!cancelled) {
+          setShareBatches(incoming);
+          setLocalBatches(pending);
+          setBatchError(null);
+        }
+      } catch (reason) {
+        if (!cancelled && activeSection === "transfers") setBatchError(errorMessage(reason));
+      }
+    }
+    void reload();
+    const timer = window.setInterval(() => void reload(), 30_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [activeServerId, activeSection]);
 
   useEffect(() => {
     if (!isTauriRuntime || !activeServerId) return;
@@ -1192,6 +1250,34 @@ function MainApp() {
       setOfferError(errorMessage(reason));
     } finally {
       setOfferBusy(null);
+    }
+  }
+
+  async function handleBatch(batch: ShareBatch, action: "accept" | "reject" | "resume") {
+    if (batchBusy) return;
+    setBatchBusy(batch.id);
+    setBatchError(null);
+    try {
+      await invoke(action === "accept" ? "accept_share_batch" : action === "reject" ? "reject_share_batch" : "resume_received_batch", { batchId: batch.id });
+      setShareBatches(await invoke<ShareBatch[]>("list_share_batches"));
+    } catch (reason) {
+      setBatchError(errorMessage(reason));
+    } finally {
+      setBatchBusy(null);
+    }
+  }
+
+  async function resumeLocalBatch(item: LocalBatchSummary) {
+    if (batchBusy) return;
+    setBatchBusy(item.requestKey);
+    setBatchError(null);
+    try {
+      await invoke("resume_share_batch", { requestKey: item.requestKey });
+      setLocalBatches(await invoke<LocalBatchSummary[]>("list_local_share_batches"));
+    } catch (reason) {
+      setBatchError(errorMessage(reason));
+    } finally {
+      setBatchBusy(null);
     }
   }
 
@@ -1745,15 +1831,6 @@ function MainApp() {
 
   const incomingOffer = offers.find((offer) => offer.id !== dismissedOfferId) ?? null;
 
-  function accountDeviceIcon(platformName: string): IconName {
-    const value = platformName.toLowerCase();
-    if (value.includes("android")) return "android";
-    if (value.includes("mac") || value.includes("ios")) return "apple";
-    if (value.includes("win")) return "windows";
-    if (value.includes("linux")) return "linux";
-    return "devices";
-  }
-
   return (
     <main className={`desktop-shell${sidebarExpanded ? " sidebar-expanded" : ""}${sidebarPinned ? " sidebar-pinned" : ""}`}>
       <div className="ambient ambient-one" />
@@ -2134,6 +2211,12 @@ function MainApp() {
             {deviceName} {ui.devices.pairedWith} {server?.serverName}.
             </strong>
             <p className="server-address">{server?.address}</p>
+            {profiles.some((profile) => profile.serverId === activeServerId && !profile.fileBatchApproved) && (
+              <div className="connection-message">
+                <p>{language === "ru" ? "Приём пакетов файлов требует повторного подтверждения подключения в HomePlace." : "Receiving file batches requires approving this connection again in HomePlace."}</p>
+                <button type="button" disabled={busy} onClick={() => { setError(null); setState("verified"); }}>{language === "ru" ? "Подтвердить новые возможности" : "Approve new capabilities"}</button>
+              </div>
+            )}
             <p>
             {ui.devices.credential} {platform.secureStorage}. {ui.devices.background}
             </p>
@@ -2358,6 +2441,39 @@ function MainApp() {
 
       {activeSection === "transfers" && (
         <section className="section-stack" aria-label="Transfers">
+          {activeServerId && profiles.some((profile) => profile.serverId === activeServerId && !profile.fileBatchApproved) && (
+            <article className="glass-card">
+              <p>{language === "ru" ? "Чтобы принимать несколько файлов одним пакетом, подтвердите новое разрешение в настройках подключения. Обычная отправка и приём отдельных файлов доступны." : "To receive file batches, approve the new permission in connection settings. Individual file transfers remain available."}</p>
+              <button type="button" onClick={() => setActiveSection("settings")}>{language === "ru" ? "Настройки подключения" : "Connection settings"}</button>
+            </article>
+          )}
+          {activeServerId && (shareBatches.length > 0 || localBatches.length > 0 || batchError) && (
+            <article className="glass-card transfer-list">
+              <div className="section-heading"><div><p className="eyebrow">HOMEPLACE LINK</p><h3>{language === "ru" ? "Пакеты файлов" : "File batches"}</h3></div>
+                <span>{shareBatches.filter((batch) => batch.status === "offered").length}</span></div>
+              {shareBatches.map((batch) => (
+                <div className="transfer-row" key={batch.id}>
+                  <span aria-hidden>↓</span>
+                  <div><b>{batch.files.length} {language === "ru" ? "файлов" : "files"}</b>
+                    <small>{batch.files.map((file) => file.filename).join(", ")}</small>
+                    <small>{batch.files.filter((file) => file.received).length}/{batch.files.length} {language === "ru" ? "получено" : "received"}</small>
+                  </div>
+                  {batch.status === "offered" ? <>
+                    <button type="button" disabled={batchBusy !== null} onClick={() => void handleBatch(batch, "accept")}>{language === "ru" ? "Принять в папку" : "Accept to folder"}</button>
+                    <button type="button" disabled={batchBusy !== null} onClick={() => void handleBatch(batch, "reject")}>{ui.transfers.decline}</button>
+                  </> : batch.status === "accepted" ? <>
+                    <button type="button" disabled={batchBusy !== null} onClick={() => void handleBatch(batch, "resume")}>{language === "ru" ? "Продолжить" : "Resume"}</button>
+                    <button type="button" disabled={batchBusy !== null} onClick={() => void handleBatch(batch, "accept")}>{language === "ru" ? "Выбрать папку" : "Choose folder"}</button>
+                  </> : null}
+                </div>
+              ))}
+              {localBatches.map((item) => <div className="transfer-row" key={item.requestKey}>
+                <span aria-hidden>↑</span><div><b>{item.fileCount} {language === "ru" ? "файлов — отправка не завершена" : "files — sending incomplete"}</b></div>
+                <button type="button" disabled={batchBusy !== null} onClick={() => void resumeLocalBatch(item)}>{language === "ru" ? "Продолжить" : "Resume"}</button>
+              </div>)}
+              {batchError && <p className="setting-error" role="alert">{batchError}</p>}
+            </article>
+          )}
           <article className="glass-card transfer-list">
             <div className="section-heading"><div><p className="eyebrow">{ui.transfers.inbox}</p><h3>{ui.transfers.waiting}</h3></div><span>{offers.length}</span></div>
             {offers.length === 0 ? (
@@ -2907,7 +3023,16 @@ function ShareComposer({ language }: { language: Language }) {
     setError(null);
     try {
       if (files.length > 0) {
-        for (const [fileIndex, filePath] of files.entries()) {
+        if (files.length > 1) {
+          const stopProgress = await listen<FileBatchProgress>("link-file-batch-progress", ({ payload: progress }) => {
+            setTransferProgress({ transferId: progress.batchId, fileName: progress.fileName,
+              transferredBytes: progress.transferredBytes, totalBytes: progress.totalBytes,
+              fileIndex: progress.fileIndex - 1, fileCount: progress.fileCount, targetName: target.name });
+          });
+          try {
+            await invoke("send_share_batch", { targetDeviceId: target.id, filePaths: files });
+          } finally { stopProgress(); }
+        } else for (const [fileIndex, filePath] of files.entries()) {
           const transferId = newTransferId();
           const fileName = filePath.split(/[\\/]/).pop() || filePath;
           setTransferProgress({ transferId, fileName, transferredBytes: 0, totalBytes: 0, fileIndex, fileCount: files.length, targetName: target.name });
@@ -3028,6 +3153,7 @@ function QuickShareWindow() {
     return saved === "en" || saved === "ru" ? saved : navigator.language.toLowerCase().startsWith("ru") ? "ru" : "en";
   });
   const [targets, setTargets] = useState<ShareTarget[]>([]);
+  const [targetsLoading, setTargetsLoading] = useState(true);
   const [payload, setPayload] = useState<QuickSharePayload | null>(null);
   const [text, setText] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -3036,27 +3162,63 @@ function QuickShareWindow() {
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
   const [transferProgress, setTransferProgress] = useState<ActiveTransferProgress | null>(null);
+  const [visible, setVisible] = useState(false);
+  const busyRef = useRef<string | null>(null);
+  const payloadRef = useRef<QuickSharePayload | null>(null);
+  const sentRef = useRef(false);
+  const errorRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    busyRef.current = busy;
+    payloadRef.current = payload;
+    sentRef.current = sent;
+    errorRef.current = error;
+  }, [busy, payload, sent, error]);
+  const motion = useRef<QuickShareLifecycle | null>(null);
+  if (motion.current === null) {
+    motion.current = new QuickShareLifecycle(setVisible, () => {
+      void getCurrentWindow().hide();
+      void invoke("set_quick_share_pinned", { pinned: false });
+      setPayload(null);
+      setText("");
+      setExpanded(false);
+      setSent(false);
+      setTransferProgress(null);
+      setError(null);
+    });
+  }
 
   const loadTargets = useCallback(() => {
     setError(null);
+    setTargetsLoading(true);
     void invoke<ShareTarget[]>("list_share_targets")
       .then(setTargets)
-      .catch((reason) => setError(errorMessage(reason)));
+      .catch((reason) => setError(errorMessage(reason)))
+      .finally(() => setTargetsLoading(false));
   }, []);
 
   const stageText = useCallback((value: string) => {
+    if (busyRef.current) return;
+    motion.current?.open();
     setText(value);
     setSent(false);
     setTransferProgress(null);
     setError(null);
     const trimmed = value.trim();
     if (!trimmed) return setPayload(null);
+    setExpanded(true);
     setPayload({ kind: /^https?:\/\/\S+$/i.test(trimmed) ? "url" : "text", value: trimmed, label: trimmed });
   }, []);
 
   const stageFiles = useCallback((paths: string[]) => {
-    const unique = [...new Set(paths)].slice(0, 20);
+    if (busyRef.current) return;
+    const unique = [...new Set(paths)];
     if (unique.length === 0) return;
+    motion.current?.open();
+    if (unique.length > 20) {
+      setExpanded(true);
+      setError(language === "ru" ? "Выберите не больше 20 файлов за одну отправку." : "Choose up to 20 files per transfer.");
+      return;
+    }
     const firstName = unique[0].split(/[\\/]/).pop() || unique[0];
     setPayload({
       kind: "files",
@@ -3069,7 +3231,7 @@ function QuickShareWindow() {
     setTransferProgress(null);
     setError(null);
     loadTargets();
-  }, [loadTargets]);
+  }, [loadTargets, language]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3079,6 +3241,7 @@ function QuickShareWindow() {
     let stopNativeStage: (() => void) | undefined;
     let stopDragState: (() => void) | undefined;
     let stopDrop: (() => void) | undefined;
+    let stopClose: (() => void) | undefined;
     const consumeNativeShare = () => {
       void invoke<PendingNativeShare | null>("take_pending_share").then((pending) => {
         if (cancelled || !pending) return;
@@ -3088,11 +3251,21 @@ function QuickShareWindow() {
     };
     void listen<boolean>("quick-share-opened", ({ payload: shouldExpand }) => {
       if (!cancelled) {
-        setExpanded(shouldExpand);
+        motion.current?.open();
+        setExpanded(shouldExpand || payloadRef.current !== null || busyRef.current !== null);
+        if (!busyRef.current) setSent(false);
         loadTargets();
       }
     }).then((unlisten) => {
       if (cancelled) unlisten(); else stopOpen = unlisten;
+    });
+    void listen<boolean>("quick-share-close-requested", ({ payload: explicit }) => {
+      if (!cancelled && !busyRef.current && (explicit || (!payloadRef.current && !sentRef.current && !errorRef.current))) motion.current?.close();
+    }).then((unlisten) => {
+      if (cancelled) unlisten(); else stopClose = unlisten;
+    });
+    void getCurrentWindow().isVisible().then((shown) => {
+      if (!cancelled && shown) motion.current?.open();
     });
     void listen<string>("quick-share-stage-text", ({ payload: stagedText }) => {
       if (!cancelled) stageText(stagedText);
@@ -3115,7 +3288,7 @@ function QuickShareWindow() {
     void listen<boolean>("quick-share-drag-active", ({ payload: active }) => {
       if (!cancelled) {
         setDragging(active);
-        if (active) setExpanded(false);
+        if (active && !payloadRef.current && !busyRef.current) setExpanded(false);
       }
     }).then((unlisten) => {
       if (cancelled) unlisten(); else stopDragState = unlisten;
@@ -3142,6 +3315,8 @@ function QuickShareWindow() {
       stopNativeStage?.();
       stopDragState?.();
       stopDrop?.();
+      stopClose?.();
+      motion.current?.dispose();
     };
   }, [loadTargets, stageFiles, stageText]);
 
@@ -3152,21 +3327,13 @@ function QuickShareWindow() {
   }, [expanded]);
 
   useEffect(() => {
-    void invoke("set_quick_share_pinned", { pinned: payload !== null }).catch((reason) => {
+    void invoke("set_quick_share_pinned", { pinned: payload !== null || busy !== null || sent || error !== null }).catch((reason) => {
       setError(errorMessage(reason));
     });
-  }, [payload]);
+  }, [payload, busy, sent, error]);
 
   const dismissShelf = useCallback(() => {
-    setPayload(null);
-    setText("");
-    setExpanded(false);
-    setSent(false);
-    setTransferProgress(null);
-    setError(null);
-    void invoke("set_quick_share_pinned", { pinned: false }).finally(() => {
-      void getCurrentWindow().hide();
-    });
+    if (!busyRef.current) motion.current?.close();
   }, []);
 
   useEffect(() => {
@@ -3179,13 +3346,24 @@ function QuickShareWindow() {
 
   async function send(target: ShareTarget) {
     if (!payload || busy) return;
+    motion.current?.open();
+    busyRef.current = target.id;
     setBusy(target.id);
     setError(null);
     setSent(false);
     setTransferProgress(null);
     try {
       if (payload.kind === "files") {
-        for (const [fileIndex, filePath] of payload.paths.entries()) {
+        if (payload.paths.length > 1) {
+          const stopProgress = await listen<FileBatchProgress>("link-file-batch-progress", ({ payload: progress }) => {
+            setTransferProgress({ transferId: progress.batchId, fileName: progress.fileName,
+              transferredBytes: progress.transferredBytes, totalBytes: progress.totalBytes,
+              fileIndex: progress.fileIndex - 1, fileCount: progress.fileCount, targetName: target.name });
+          });
+          try {
+            await invoke("send_share_batch", { targetDeviceId: target.id, filePaths: payload.paths });
+          } finally { stopProgress(); }
+        } else for (const [fileIndex, filePath] of payload.paths.entries()) {
           const transferId = newTransferId();
           const fileName = filePath.split(/[\\/]/).pop() || filePath;
           setTransferProgress({ transferId, fileName, transferredBytes: 0, totalBytes: 0, fileIndex, fileCount: payload.paths.length, targetName: target.name });
@@ -3206,16 +3384,12 @@ function QuickShareWindow() {
       setText("");
       setTransferProgress(null);
       setSent(true);
-      loadTargets();
-      await invoke("set_quick_share_pinned", { pinned: false });
-      window.setTimeout(() => {
-        setExpanded(false);
-        void getCurrentWindow().hide();
-      }, 1400);
+      motion.current?.afterSuccess(dismissShelf);
     } catch (reason) {
       setError(errorMessage(reason));
       setTransferProgress(null);
     } finally {
+      busyRef.current = null;
       setBusy(null);
     }
   }
@@ -3227,13 +3401,16 @@ function QuickShareWindow() {
 
   return (
     <main
-      className={`tray-share-root${expanded ? " expanded" : ""}${dragging ? " dragging" : ""}${busy ? " sending" : ""}${sent ? " sent" : ""}`}
+      className={`tray-share-root${visible ? " visible" : " closing"}${expanded ? " expanded" : ""}${dragging ? " dragging" : ""}${busy ? " sending" : ""}${sent ? " sent" : ""}`}
+      aria-busy={busy !== null}
       onMouseEnter={() => {
         setExpanded(true);
         void invoke("set_quick_share_pointer_inside", { inside: true });
       }}
       onMouseLeave={() => {
-        if (!busy && !payload && !sent) setExpanded(false);
+        void getCurrentWindow().isFocused().then((focused) => {
+          if (!focused && !busyRef.current && !payloadRef.current && !sentRef.current) setExpanded(false);
+        });
         void invoke("set_quick_share_pointer_inside", { inside: false });
       }}
     >
@@ -3263,26 +3440,30 @@ function QuickShareWindow() {
         {expanded && <div className="tray-share-titlebar">
           <span><Icon name="transfer" size={17} /></span>
           <div><b>{language === "ru" ? "Быстрая отправка" : "Quick share"}</b><small>HomePlace Link</small></div>
-          <button type="button" disabled={busy !== null} onClick={dismissShelf}>×</button>
+          <button type="button" disabled={busy !== null} aria-label={language === "ru" ? "Закрыть быструю отправку" : "Close quick share"} onClick={dismissShelf}>×</button>
         </div>}
         {expanded && <div className="quick-share-panel">
           <div className="quick-share-copy">
             <b>{dragging
               ? (language === "ru" ? "Отпустите — файл останется на полке" : "Drop it — the file will stay on the shelf")
-              : (language === "ru" ? "Перетащите файл из Finder" : "Drop a file from Finder")}</b>
+              : payload ? (language === "ru" ? "Куда отправить?" : "Where should it go?")
+              : (language === "ru" ? "Перетащите файлы сюда" : "Drop files here")}</b>
             <small>{dragging
               ? (language === "ru" ? "После этого спокойно выберите устройство для отправки." : "Then choose a device whenever you are ready.")
+              : payload ? (language === "ru" ? "Нажмите на устройство ниже, чтобы отправить." : "Choose a device below to send.")
               : (language === "ru" ? "Или вставьте текст или ссылку, затем выберите устройство." : "Or paste text or a link, then choose a device.")}</small>
           </div>
           {payload?.kind === "files" ? (
             <div className="quick-share-payload">
               <Icon name="transfer" size={17} />
               <span><b>{payload.label}</b><small>{language === "ru" ? `${payload.paths.length} файл(ов), до ${fileLimitLabel(fileLimit, language)} каждый` : `${payload.paths.length} file(s), up to ${fileLimitLabel(fileLimit, language)} each`}</small></span>
-              <button type="button" disabled={busy !== null} onClick={dismissShelf}>×</button>
+              <button type="button" disabled={busy !== null} aria-label={language === "ru" ? "Убрать файлы с полки" : "Remove files from shelf"} onClick={() => { setPayload(null); setText(""); setError(null); setTransferProgress(null); motion.current?.open(); }}>×</button>
             </div>
           ) : (
             <textarea
               value={text}
+              disabled={busy !== null}
+              aria-label={language === "ru" ? "Текст или ссылка для отправки" : "Text or link to send"}
               maxLength={8000}
               rows={3}
               placeholder={language === "ru" ? "Вставьте текст или ссылку" : "Paste text or a link"}
@@ -3303,16 +3484,17 @@ function QuickShareWindow() {
           {payload?.kind === "files" && payload.paths.length > 1 && <p className="temporary-exchange-note">{language === "ru" ? "Для временной ссылки выберите один файл." : "Choose one file for a temporary link."}</p>}
           <div className="quick-share-targets">
             {compatible.map((target) => (
-              <button type="button" key={target.id} disabled={!payload || busy !== null} onClick={() => void send(target)}>
-                <span className={target.online ? "online" : undefined}><Icon name="devices" size={17} /></span>
-                <span><b>{target.name}</b><small>{target.ownerName} · {target.platform}</small></span>
+              <button type="button" key={target.id} aria-label={language === "ru" ? `Отправить на ${target.name}` : `Send to ${target.name}`} disabled={!payload || busy !== null} onClick={() => void send(target)}>
+                <span className={target.online ? "online" : undefined}><Icon name={accountDeviceIcon(target.platform)} size={20} /></span>
+                <span><b>{target.name}</b><small>{target.ownerName} · {target.platform}{!target.online ? (language === "ru" ? " · Не в сети" : " · Offline") : ""}</small></span>
                 <em>{busy === target.id && transferProgress ? <TransferProgressRing progress={transferProgress} compact /> : busy === target.id ? "…" : "→"}</em>
               </button>
             ))}
-            {compatible.length === 0 && <p>{language === "ru" ? "Нет доступных устройств. Проверьте разрешение быстрой отправки в HomePlace." : "No available devices. Check quick-sharing permission in HomePlace."}</p>}
+            {compatible.length === 0 && targetsLoading && <p role="status">{language === "ru" ? "Загружаем устройства…" : "Loading devices…"}</p>}
+            {compatible.length === 0 && !targetsLoading && !error && <p>{language === "ru" ? "Нет устройств с подходящими разрешениями. Проверьте быструю отправку в HomePlace." : "No devices have the required permission. Check quick sharing in HomePlace."}</p>}
           </div>
-          {sent && <p className="quick-share-success">{language === "ru" ? "Отправлено — ожидается подтверждение." : "Sent — waiting for approval."}</p>}
-          {error && <p className="setting-error" role="alert">{error}</p>}
+          {sent && <p className="quick-share-success" role="status">{language === "ru" ? "Отправлено — получателю предложено принять." : "Sent — the recipient can accept it."}</p>}
+          {error && <div className="setting-error" role="alert"><p>{error}</p><button type="button" disabled={targetsLoading || busy !== null} onClick={loadTargets}>{language === "ru" ? "Обновить устройства" : "Refresh devices"}</button></div>}
         </div>}
       </section>
     </main>

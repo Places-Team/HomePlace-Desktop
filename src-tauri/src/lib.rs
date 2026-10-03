@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use platform::PlatformInfo;
 use serde::Serialize;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 static QUICK_SHARE_WAS_FOCUSED: AtomicBool = AtomicBool::new(false);
@@ -175,13 +175,13 @@ pub fn run() {
                         } else if QUICK_SHARE_WAS_FOCUSED.swap(false, Ordering::Relaxed)
                             && !tray::quick_share_is_pinned()
                         {
-                            let _ = window.hide();
+                            let _ = window.emit("quick-share-close-requested", false);
                         }
                     }
                     tauri::WindowEvent::CloseRequested { api, .. } => {
                         QUICK_SHARE_WAS_FOCUSED.store(false, Ordering::Relaxed);
                         api.prevent_close();
-                        let _ = window.hide();
+                        let _ = window.emit("quick-share-close-requested", true);
                     }
                     _ => {}
                 }
@@ -257,6 +257,14 @@ pub fn run() {
             link::client::mutate_ideas,
             link::client::send_share_text,
             link::client::send_share_file,
+            link::batches::send_share_batch,
+            link::batches::resume_share_batch,
+            link::batches::list_local_share_batches,
+            link::batches::file_batch_receive_approved,
+            link::batches::list_share_batches,
+            link::batches::accept_share_batch,
+            link::batches::reject_share_batch,
+            link::batches::resume_received_batch,
             link::client::list_reminders,
             link::client::list_calendar_events,
             link::client::create_calendar_event,

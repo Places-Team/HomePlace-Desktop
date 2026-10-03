@@ -39,6 +39,8 @@ pub struct ProtocolRange {
 pub struct LinkFeatures {
     pub pairing: bool,
     pub realtime: bool,
+    #[serde(default, rename = "fileBatches")]
+    pub file_batches: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -108,6 +110,7 @@ mod tests {
             features: LinkFeatures {
                 pairing: true,
                 realtime: false,
+                file_batches: false,
             },
             limits: None,
         }

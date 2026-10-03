@@ -241,6 +241,9 @@ fn quick_share_anchor<R: Runtime>(app: &AppHandle<R>) -> Option<Rect> {
 }
 
 pub fn show_quick_share_for_drag<R: Runtime>(app: &AppHandle<R>) {
+    if QUICK_SHARE_PINNED.load(Ordering::Relaxed) {
+        return;
+    }
     QUICK_SHARE_POINTER_INSIDE.store(false, Ordering::Relaxed);
     let Some(window) = app.get_webview_window("quick-share") else {
         return;
@@ -398,7 +401,7 @@ fn schedule_quick_share_hide<R: Runtime>(app: AppHandle<R>) {
             return;
         };
         if !window.is_focused().unwrap_or(false) {
-            let _ = window.hide();
+            let _ = window.emit("quick-share-close-requested", false);
         }
     });
 }

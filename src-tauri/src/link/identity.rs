@@ -30,6 +30,8 @@ pub struct StoredProfile {
     pub address: String,
     pub device_id: String,
     pub device_name: String,
+    #[serde(default)]
+    pub file_batch_approved: bool,
 }
 
 pub fn public_key(server_id: &str) -> Result<String, String> {
@@ -296,7 +298,15 @@ mod tests {
             address: format!("https://home-{index}.example"),
             device_id: format!("device-{index}"),
             device_name: "Desktop".into(),
+            file_batch_approved: false,
         }
+    }
+
+    #[test]
+    fn old_profiles_do_not_gain_batch_receive_approval() {
+        let old = r#"{"serverId":"server-1","serverName":"Home","address":"https://example.com","deviceId":"device-1","deviceName":"Desktop"}"#;
+        let profile: StoredProfile = serde_json::from_str(old).unwrap();
+        assert!(!profile.file_batch_approved);
     }
 
     #[test]
