@@ -968,6 +968,7 @@ button.metric-card:hover { border-color: var(--line); background: var(--panel-so
 html[data-window="quick-share"],
 html[data-window="quick-share"] body,
 html[data-window="quick-share"] #root { background: transparent; }
+html[data-window="quick-share"] { color-scheme: normal; }
 .tray-share-root .quick-share-shelf {
   border-color: var(--line-strong);
   border-radius: 2px 14px 2px 2px;

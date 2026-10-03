@@ -241,13 +241,18 @@ fn quick_share_anchor<R: Runtime>(app: &AppHandle<R>) -> Option<Rect> {
 }
 
 pub fn show_quick_share_for_drag<R: Runtime>(app: &AppHandle<R>) {
-    if QUICK_SHARE_PINNED.load(Ordering::Relaxed) {
-        return;
-    }
-    QUICK_SHARE_POINTER_INSIDE.store(false, Ordering::Relaxed);
     let Some(window) = app.get_webview_window("quick-share") else {
         return;
     };
+    if QUICK_SHARE_PINNED.load(Ordering::Relaxed) {
+        if !window.is_visible().unwrap_or(false)
+            && let Some(rect) = quick_share_anchor(app)
+        {
+            show_quick_share(app, rect, false);
+        }
+        return;
+    }
+    QUICK_SHARE_POINTER_INSIDE.store(false, Ordering::Relaxed);
     let _ = window.set_size(tauri::LogicalSize::new(104.0, 56.0));
     let _ = app.emit("quick-share-drag-active", true);
     if let Some(rect) = quick_share_anchor(app) {
@@ -414,10 +419,6 @@ pub fn set_quick_share_pointer_inside(inside: bool) {
 #[tauri::command]
 pub fn set_quick_share_pinned(pinned: bool) {
     QUICK_SHARE_PINNED.store(pinned, Ordering::Relaxed);
-}
-
-pub fn quick_share_is_pinned() -> bool {
-    QUICK_SHARE_PINNED.load(Ordering::Relaxed)
 }
 
 pub fn set_connection_state<R: Runtime>(app: &AppHandle<R>, state: ConnectionState) {

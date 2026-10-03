@@ -124,6 +124,8 @@ pub struct ShareTarget {
     supports_text: bool,
     supports_url: bool,
     supports_file: bool,
+    #[serde(default)]
+    supports_file_batch: bool,
     online: bool,
     owner_name: String,
     owned_by_current_user: bool,
@@ -3200,6 +3202,25 @@ mod clipboard_retry_tests {
 #[cfg(test)]
 mod heartbeat_upgrade_tests {
     use super::*;
+
+    #[test]
+    fn share_targets_require_explicit_batch_support() {
+        let base = serde_json::json!({"id":"device_1","name":"Phone","platform":"android",
+            "supportsText":true,"supportsUrl":true,"supportsFile":true,"online":true,
+            "ownerName":"Owner","ownedByCurrentUser":true});
+        let legacy: ShareTarget = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(legacy).unwrap()["supportsFileBatch"],
+            false
+        );
+        let mut modern = base;
+        modern["supportsFileBatch"] = true.into();
+        let modern: ShareTarget = serde_json::from_value(modern).unwrap();
+        assert_eq!(
+            serde_json::to_value(modern).unwrap()["supportsFileBatch"],
+            true
+        );
+    }
 
     #[test]
     fn heartbeat_does_not_silently_add_unapproved_capabilities() {

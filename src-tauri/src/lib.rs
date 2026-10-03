@@ -173,9 +173,9 @@ pub fn run() {
                         if *focused {
                             QUICK_SHARE_WAS_FOCUSED.store(true, Ordering::Relaxed);
                         } else if QUICK_SHARE_WAS_FOCUSED.swap(false, Ordering::Relaxed)
-                            && !tray::quick_share_is_pinned()
+                            && window.is_visible().unwrap_or(false)
                         {
-                            let _ = window.emit("quick-share-close-requested", false);
+                            let _ = window.emit("quick-share-blurred", ());
                         }
                     }
                     tauri::WindowEvent::CloseRequested { api, .. } => {

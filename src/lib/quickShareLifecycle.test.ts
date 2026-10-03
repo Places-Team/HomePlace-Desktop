@@ -4,6 +4,18 @@ import { QuickShareLifecycle } from "./quickShareLifecycle";
 afterEach(() => vi.useRealTimers());
 
 describe("Quick Share dismissal", () => {
+  it("distinguishes hiding a staged shelf from discarding its contents", () => {
+    vi.useFakeTimers();
+    const hide = vi.fn();
+    const shelf = new QuickShareLifecycle(vi.fn(), hide);
+    shelf.close(false);
+    vi.advanceTimersByTime(120);
+    expect(hide).toHaveBeenLastCalledWith(false);
+    shelf.open();
+    shelf.close(true);
+    vi.advanceTimersByTime(120);
+    expect(hide).toHaveBeenLastCalledWith(true);
+  });
   it("waits for the exit animation before hiding the native window", () => {
     vi.useFakeTimers();
     const hide = vi.fn();
