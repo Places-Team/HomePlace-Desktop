@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { groupIncomingFiles } from "./incomingShares";
+import { groupIncomingFiles, shouldDismissIncomingShelf } from "./incomingShares";
 
 describe("incoming file consent", () => {
+  it("dismisses a resolved inbox, but not a new empty shelf", () => {
+    expect(shouldDismissIncomingShelf(true, false, false, false, false)).toBe(true);
+    expect(shouldDismissIncomingShelf(false, false, false, false, false)).toBe(false);
+  });
+  it("preserves pending consent, active work, outgoing drafts and errors", () => {
+    expect(shouldDismissIncomingShelf(true, true, false, false, false)).toBe(false);
+    expect(shouldDismissIncomingShelf(true, false, true, false, false)).toBe(false);
+    expect(shouldDismissIncomingShelf(true, false, false, true, false)).toBe(false);
+    expect(shouldDismissIncomingShelf(true, false, false, false, true)).toBe(false);
+  });
   it("groups pending files by sender without accepting later arrivals", () => {
     const offers = [
       { id: "1", kind: "file", sourceName: "Phone" },

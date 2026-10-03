@@ -16,7 +16,7 @@ import { copy, type Language } from "./lib/i18n";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
 import { fileLimitLabel, useFileTransferLimit } from "./lib/useFileTransferLimit";
 import { QuickShareLifecycle } from "./lib/quickShareLifecycle";
-import { groupIncomingFiles } from "./lib/incomingShares";
+import { groupIncomingFiles, shouldDismissIncomingShelf } from "./lib/incomingShares";
 
 type ConnectionState =
   | "not-configured"
@@ -3151,6 +3151,7 @@ function ShareComposer({ language }: { language: Language }) {
 function QuickShareWindow() {
   const [incoming, setIncoming] = useState<ShareOfferSummary[]>([]);
   const [incomingBatches, setIncomingBatches] = useState<ShareBatch[]>([]);
+  const hadIncomingRef = useRef(false);
   const fileLimit = useFileTransferLimit();
   const [language] = useState<Language>(() => {
     const saved = window.localStorage.getItem("homeplace-language");
@@ -3191,6 +3192,16 @@ function QuickShareWindow() {
       setError(null);
     });
   }
+
+  const hasIncomingFiles = incoming.some(offer => offer.kind === "file")
+    || incomingBatches.some(batch => batch.status === "offered" || batch.status === "accepted");
+  useEffect(() => {
+    if (hasIncomingFiles) hadIncomingRef.current = true;
+    if (shouldDismissIncomingShelf(hadIncomingRef.current, hasIncomingFiles, busy !== null, payload !== null || sent, error !== null)) {
+      hadIncomingRef.current = false;
+      motion.current?.close(false);
+    }
+  }, [hasIncomingFiles, busy, payload, sent, error]);
 
   const loadTargets = useCallback(() => {
     setError(null);
