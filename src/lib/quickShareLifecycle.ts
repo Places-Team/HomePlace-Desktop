@@ -8,16 +8,19 @@ export class QuickShareLifecycle {
   constructor(
     private readonly visibility: (visible: boolean) => void,
     private readonly hide: (discard: boolean) => void,
+    private readonly nativeVisibility: (visible: boolean) => void = () => {},
   ) {}
 
   open() {
     this.dispose();
     this.visibility(true);
+    this.nativeVisibility(true);
   }
 
   close(discard = false) {
     this.dispose();
     this.visibility(false);
+    this.nativeVisibility(false);
     this.exitTimer = setTimeout(() => {
       this.exitTimer = undefined;
       this.hide(discard);

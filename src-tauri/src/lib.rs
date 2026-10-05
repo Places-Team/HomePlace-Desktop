@@ -1,6 +1,7 @@
 mod link;
 mod native;
 mod platform;
+mod quick_share;
 mod startup;
 mod tray;
 
@@ -146,6 +147,10 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            if let Some(window) = app.get_webview_window("quick-share") {
+                quick_share::configure(&window);
+                let _ = window.set_ignore_cursor_events(true);
+            }
             // Some Linux desktop environments do not provide a tray host. In
             // that case HomePlace keeps its normal close behaviour.
             let _ = tray::install(app);
@@ -202,6 +207,8 @@ pub fn run() {
             platform_info,
             start_window_drag,
             set_quick_share_expanded,
+            quick_share::set_quick_share_open,
+            quick_share::focus_quick_share,
             pick_share_files,
             pick_exchange_file,
             native::authenticate_sensitive_action,

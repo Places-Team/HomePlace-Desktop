@@ -353,6 +353,7 @@ fn show_quick_share<R: Runtime>(app: &AppHandle<R>, tray_rect: Rect, focus: bool
     let Some(window) = app.get_webview_window("quick-share") else {
         return;
     };
+    crate::quick_share::prepare_show(app);
     let scale_factor = window.scale_factor().unwrap_or(1.0);
     let tray_position = tray_rect.position.to_physical::<f64>(scale_factor);
     let tray_size = tray_rect.size.to_physical::<f64>(scale_factor);

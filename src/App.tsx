@@ -3181,7 +3181,6 @@ function QuickShareWindow() {
   const motion = useRef<QuickShareLifecycle | null>(null);
   if (motion.current === null) {
     motion.current = new QuickShareLifecycle(setVisible, (discard) => {
-      void getCurrentWindow().hide();
       if (!discard) return;
       void invoke("set_quick_share_pinned", { pinned: false });
       setPayload(null);
@@ -3190,6 +3189,8 @@ function QuickShareWindow() {
       setSent(false);
       setTransferProgress(null);
       setError(null);
+    }, (open) => {
+      void invoke("set_quick_share_open", { open }).catch(reason => setError(errorMessage(reason)));
     });
   }
 
@@ -3281,7 +3282,7 @@ function QuickShareWindow() {
       paths: unique,
       label: unique.length === 1 ? firstName : `${firstName} +${unique.length - 1}`,
     });
-    void getCurrentWindow().setFocus().catch(() => {});
+    void invoke("focus_quick_share").catch(reason => setError(errorMessage(reason)));
     setText("");
     setExpanded(true);
     setSent(false);

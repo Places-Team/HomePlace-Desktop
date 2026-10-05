@@ -1878,6 +1878,7 @@ dependencies = [
  "futures-util",
  "hostname",
  "keyring",
+ "objc2-app-kit",
  "os_info",
  "p256",
  "reqwest",

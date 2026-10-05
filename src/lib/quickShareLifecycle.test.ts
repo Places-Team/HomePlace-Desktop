@@ -4,6 +4,17 @@ import { QuickShareLifecycle } from "./quickShareLifecycle";
 afterEach(() => vi.useRealTimers());
 
 describe("Quick Share dismissal", () => {
+  it("disables native hit testing as soon as closing starts", () => {
+    vi.useFakeTimers();
+    const nativeVisibility = vi.fn();
+    const shelf = new QuickShareLifecycle(vi.fn(), vi.fn(), nativeVisibility);
+    shelf.open();
+    expect(nativeVisibility).toHaveBeenLastCalledWith(true);
+    shelf.close();
+    expect(nativeVisibility).toHaveBeenLastCalledWith(false);
+    shelf.open();
+    expect(nativeVisibility).toHaveBeenLastCalledWith(true);
+  });
   it("distinguishes hiding a staged shelf from discarding its contents", () => {
     vi.useFakeTimers();
     const hide = vi.fn();
