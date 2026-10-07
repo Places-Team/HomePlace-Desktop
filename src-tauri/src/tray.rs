@@ -262,6 +262,11 @@ pub fn show_quick_share_for_drag<R: Runtime>(app: &AppHandle<R>) {
 pub fn finish_quick_share_drag<R: Runtime>(app: &AppHandle<R>) {
     QUICK_SHARE_POINTER_INSIDE.store(false, Ordering::Relaxed);
     let _ = app.emit("quick-share-drag-active", false);
+    crate::quick_share::finish_drag(app);
+}
+
+pub fn quick_share_retained() -> bool {
+    QUICK_SHARE_PINNED.load(Ordering::Relaxed)
 }
 
 pub fn show_quick_share_from_extension<R: Runtime>(app: &AppHandle<R>) {

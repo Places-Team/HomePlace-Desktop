@@ -16,13 +16,37 @@ impl VisibilityEpoch {
 static EPOCH: VisibilityEpoch = VisibilityEpoch::new();
 const EXIT_MS: u64 = 120;
 
+fn should_hide_idle_drag(current: bool, retained: bool) -> bool {
+    current && !retained
+}
+
+pub fn finish_drag<R: Runtime>(app: &AppHandle<R>) {
+    let epoch = EPOCH.0.load(Ordering::SeqCst);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // Allow the WebView drop handler to stage and pin the selection first.
+        tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+        let callback_app = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            if should_hide_idle_drag(EPOCH.is_current(epoch), crate::tray::quick_share_retained()) {
+                if let Some(window) = callback_app.get_webview_window("quick-share") {
+                    let _ = window.set_ignore_cursor_events(true);
+                    let _ = window.hide();
+                }
+            }
+        });
+    });
+}
+
 pub fn configure<R: Runtime>(window: &WebviewWindow<R>) {
     let _ = window.set_skip_taskbar(true);
+    let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
     #[cfg(target_os = "macos")]
     if let Ok(pointer) = window.ns_window() {
         // Called on the app's main thread. This is Tauri's existing NSWindow;
         // never replace its class or change application-wide activation policy.
         let native = unsafe { &*pointer.cast::<objc2_app_kit::NSWindow>() };
+        native.setOpaque(false);
         use objc2_app_kit::NSAccessibility;
         use objc2_app_kit::NSWindowCollectionBehavior as Behavior;
         let mut behavior = native.collectionBehavior();
@@ -92,6 +116,13 @@ pub fn focus_quick_share(window: WebviewWindow) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drag_cleanup_preserves_new_interactions_and_retained_content() {
+        assert!(should_hide_idle_drag(true, false));
+        assert!(!should_hide_idle_drag(true, true));
+        assert!(!should_hide_idle_drag(false, false));
+    }
     #[test]
     fn reopening_invalidates_both_pending_hide_and_unpainted_window_timeout() {
         let epoch = VisibilityEpoch::new();

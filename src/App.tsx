@@ -3415,10 +3415,10 @@ function QuickShareWindow() {
   }, [expanded]);
 
   useEffect(() => {
-    void invoke("set_quick_share_pinned", { pinned: payload !== null || busy !== null || sent || error !== null }).catch((reason) => {
+    void invoke("set_quick_share_pinned", { pinned: hasIncomingFiles || payload !== null || busy !== null || sent || error !== null }).catch((reason) => {
       setError(errorMessage(reason));
     });
-  }, [payload, busy, sent, error]);
+  }, [hasIncomingFiles, payload, busy, sent, error]);
 
   const dismissShelf = useCallback(() => {
     clearTimeout(hoverTimer.current);
