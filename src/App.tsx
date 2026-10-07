@@ -3196,6 +3196,8 @@ function QuickShareWindow() {
 
   const hasIncomingFiles = incoming.some(offer => offer.kind === "file")
     || incomingBatches.some(batch => batch.status === "offered" || batch.status === "accepted");
+  const hasIncomingFilesRef = useRef(hasIncomingFiles);
+  useLayoutEffect(() => { hasIncomingFilesRef.current = hasIncomingFiles; }, [hasIncomingFiles]);
   useEffect(() => {
     if (hasIncomingFiles) hadIncomingRef.current = true;
     if (shouldDismissIncomingShelf(hadIncomingRef.current, hasIncomingFiles, busy !== null, payload !== null || sent, error !== null)) {
@@ -3352,6 +3354,8 @@ function QuickShareWindow() {
     void listen<boolean>("quick-share-drag-active", ({ payload: active }) => {
       if (!cancelled) {
         setDragging(active);
+        if (active) motion.current?.open();
+        else motion.current?.endDrag(() => !payloadRef.current && !busyRef.current && !sentRef.current && !hasIncomingFilesRef.current);
         if (active && !payloadRef.current && !busyRef.current) setExpanded(false);
       }
     }).then((unlisten) => {

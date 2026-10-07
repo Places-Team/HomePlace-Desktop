@@ -2,7 +2,6 @@ use std::sync::{
     Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::Duration;
 
 use tauri::{
     App, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Rect, Runtime,
@@ -261,8 +260,8 @@ pub fn show_quick_share_for_drag<R: Runtime>(app: &AppHandle<R>) {
 }
 
 pub fn finish_quick_share_drag<R: Runtime>(app: &AppHandle<R>) {
+    QUICK_SHARE_POINTER_INSIDE.store(false, Ordering::Relaxed);
     let _ = app.emit("quick-share-drag-active", false);
-    schedule_quick_share_hide(app.clone());
 }
 
 pub fn show_quick_share_from_extension<R: Runtime>(app: &AppHandle<R>) {
@@ -393,23 +392,6 @@ fn show_quick_share<R: Runtime>(app: &AppHandle<R>, tray_rect: Rect, focus: bool
         let _ = window.set_focus();
     }
     let _ = app.emit("quick-share-opened", focus);
-}
-
-fn schedule_quick_share_hide<R: Runtime>(app: AppHandle<R>) {
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(450)).await;
-        if QUICK_SHARE_POINTER_INSIDE.load(Ordering::Relaxed)
-            || QUICK_SHARE_PINNED.load(Ordering::Relaxed)
-        {
-            return;
-        }
-        let Some(window) = app.get_webview_window("quick-share") else {
-            return;
-        };
-        if !window.is_focused().unwrap_or(false) {
-            let _ = window.emit("quick-share-close-requested", false);
-        }
-    });
 }
 
 #[tauri::command]

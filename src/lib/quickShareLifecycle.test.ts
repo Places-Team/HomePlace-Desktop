@@ -4,6 +4,35 @@ import { QuickShareLifecycle } from "./quickShareLifecycle";
 afterEach(() => vi.useRealTimers());
 
 describe("Quick Share dismissal", () => {
+  it("closes an empty shelf after releasing a drag without dropping", () => {
+    vi.useFakeTimers();
+    const hide = vi.fn();
+    const shelf = new QuickShareLifecycle(vi.fn(), hide);
+    shelf.open();
+    shelf.endDrag(() => true);
+    vi.advanceTimersByTime(450 + 120);
+    expect(hide).toHaveBeenCalledWith(false);
+  });
+  it("rechecks content and active work after the drop grace period", () => {
+    vi.useFakeTimers();
+    const hide = vi.fn();
+    let empty = true;
+    const shelf = new QuickShareLifecycle(vi.fn(), hide);
+    shelf.endDrag(() => empty);
+    empty = false;
+    vi.runAllTimers();
+    expect(hide).not.toHaveBeenCalled();
+  });
+  it("does not let an old drag release hide a new interaction", () => {
+    vi.useFakeTimers();
+    const hide = vi.fn();
+    const shelf = new QuickShareLifecycle(vi.fn(), hide);
+    shelf.endDrag(() => true);
+    vi.advanceTimersByTime(200);
+    shelf.open();
+    vi.runAllTimers();
+    expect(hide).not.toHaveBeenCalled();
+  });
   it("disables native hit testing as soon as closing starts", () => {
     vi.useFakeTimers();
     const nativeVisibility = vi.fn();
