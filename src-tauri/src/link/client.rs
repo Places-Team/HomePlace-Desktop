@@ -2912,6 +2912,17 @@ pub async fn send_share_file(
     target_device_id: String,
     file_path: String,
     transfer_id: String,
+    operation_id: Option<String>,
+) -> Result<(), String> {
+    let work = send_share_file_impl(app, target_device_id, file_path, transfer_id);
+    if let Some(id) = operation_id { crate::share_send::run(&id, work).await } else { work.await }
+}
+
+async fn send_share_file_impl(
+    app: AppHandle,
+    target_device_id: String,
+    file_path: String,
+    transfer_id: String,
 ) -> Result<(), String> {
     if !safe_identifier(&target_device_id) || !safe_identifier(&transfer_id) {
         return Err("The target device is invalid.".into());

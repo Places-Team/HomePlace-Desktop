@@ -2,6 +2,7 @@ mod link;
 mod native;
 mod platform;
 mod quick_share;
+mod share_send;
 mod startup;
 mod tray;
 
@@ -209,6 +210,10 @@ pub fn run() {
             start_window_drag,
             set_quick_share_expanded,
             quick_share::set_quick_share_open,
+            share_send::begin_share_send,
+            share_send::cancel_share_send,
+            share_send::finish_share_send,
+            tray::set_share_send_progress,
             quick_share::focus_quick_share,
             pick_share_files,
             pick_exchange_file,

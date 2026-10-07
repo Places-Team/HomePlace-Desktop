@@ -320,6 +320,16 @@ pub async fn send_share_batch(
     app: AppHandle,
     target_device_id: String,
     file_paths: Vec<String>,
+    operation_id: Option<String>,
+) -> Result<BatchInfo, String> {
+    let work = send_share_batch_impl(app, target_device_id, file_paths);
+    if let Some(id) = operation_id { crate::share_send::run(&id, work).await } else { work.await }
+}
+
+async fn send_share_batch_impl(
+    app: AppHandle,
+    target_device_id: String,
+    file_paths: Vec<String>,
 ) -> Result<BatchInfo, String> {
     if !safe_id(&target_device_id) || file_paths.is_empty() || file_paths.len() > MAX_BATCH_FILES {
         return Err("Choose between 1 and 100 files and a valid recipient.".into());

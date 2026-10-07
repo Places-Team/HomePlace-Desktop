@@ -274,6 +274,41 @@ pub fn quick_share_generation() -> u64 {
     QUICK_SHARE_PRESENTATION.load(Ordering::SeqCst)
 }
 
+#[tauri::command]
+pub fn set_share_send_progress(app: AppHandle, percent: Option<u8>) -> Result<(), String> {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else { return Ok(()); };
+    let Some(base) = app.default_window_icon() else { return Ok(()); };
+    if let Some(percent) = percent {
+        if percent > 100 { return Err("Invalid transfer progress.".into()); }
+        let mut pixels = vec![0_u8; 64 * 64 * 4];
+        for y in 0..64_usize {
+            for x in 0..64_usize {
+                let offset = (y * 64 + x) * 4;
+                let dx = x as f64 - 31.5;
+                let dy = y as f64 - 31.5;
+                let distance = (dx * dx + dy * dy).sqrt();
+                if (27.0..=31.0).contains(&distance) {
+                    let angle = (dy.atan2(dx) + std::f64::consts::FRAC_PI_2).rem_euclid(std::f64::consts::TAU);
+                    let filled = angle / std::f64::consts::TAU <= f64::from(percent) / 100.0;
+                    pixels[offset..offset + 4].copy_from_slice(if filled { &[237, 155, 83, 255] } else { &[140, 140, 140, 150] });
+                }
+                if (14..50).contains(&x) && (14..50).contains(&y) && base.width() > 0 && base.height() > 0 {
+                    let sx = (x - 14) * base.width() as usize / 36;
+                    let sy = (y - 14) * base.height() as usize / 36;
+                    let source = (sy * base.width() as usize + sx) * 4;
+                    pixels[offset..offset + 4].copy_from_slice(&base.rgba()[source..source + 4]);
+                }
+            }
+        }
+        tray.set_icon(Some(tauri::image::Image::new_owned(pixels, 64, 64))).map_err(|_| "Could not update tray progress.")?;
+        tray.set_tooltip(Some(format!("HomePlace Desktop · Sending files · {percent}%"))).map_err(|_| "Could not update tray tooltip.")?;
+    } else {
+        tray.set_icon(Some(base.clone())).map_err(|_| "Could not restore tray icon.")?;
+        let _ = tray.set_tooltip(Some("HomePlace Desktop"));
+    }
+    Ok(())
+}
+
 pub fn show_quick_share_from_extension<R: Runtime>(app: &AppHandle<R>) {
     if let Some(rect) = quick_share_anchor(app) {
         show_quick_share(app, rect, true);

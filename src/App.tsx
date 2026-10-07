@@ -16,6 +16,7 @@ import { copy, type Language } from "./lib/i18n";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
 import { fileLimitLabel, useFileTransferLimit } from "./lib/useFileTransferLimit";
 import { QuickShareLifecycle } from "./lib/quickShareLifecycle";
+import { sendProgressPercent } from "./lib/shareSendProgress";
 import { groupIncomingFiles, incomingFileCount, incomingHintExpanded, shouldDismissIncomingShelf } from "./lib/incomingShares";
 
 type ConnectionState =
@@ -3149,6 +3150,12 @@ function ShareComposer({ language }: { language: Language }) {
 }
 
 function QuickShareWindow() {
+  const [sendingFiles, setSendingFiles] = useState(false);
+  const [cancelRequested, setCancelRequested] = useState(false);
+  const [cancelledSend, setCancelledSend] = useState(false);
+  const sendOperationRef = useRef<string | null>(null);
+  const cancelSendRef = useRef(false);
+  const trayProgressAtRef = useRef(0);
   const [incoming, setIncoming] = useState<ShareOfferSummary[]>([]);
   const [incomingBatches, setIncomingBatches] = useState<ShareBatch[]>([]);
   const [incomingProgress, setIncomingProgress] = useState<FileTransferProgress | null>(null);
@@ -3426,12 +3433,12 @@ function QuickShareWindow() {
 
   const dismissShelf = useCallback(() => {
     clearTimeout(hoverTimer.current);
-    if (!busyRef.current) motion.current?.close(true);
+    motion.current?.close(!busyRef.current);
   }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) dismissShelf();
+      if (event.key === "Escape") dismissShelf();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -3439,6 +3446,13 @@ function QuickShareWindow() {
 
   async function send(target: ShareTarget) {
     if (!payload || busy) return;
+    const operationId = payload.kind === "files" ? newTransferId() : null;
+    let operationStarted = false;
+    setSendingFiles(operationId !== null);
+    sendOperationRef.current = operationId;
+    cancelSendRef.current = false;
+    setCancelRequested(false);
+    setCancelledSend(false);
     motion.current?.open();
     busyRef.current = target.id;
     setBusy(target.id);
@@ -3447,6 +3461,10 @@ function QuickShareWindow() {
     setTransferProgress(null);
     try {
       if (payload.kind === "files") {
+        await invoke("begin_share_send", { operationId });
+        operationStarted = true;
+        if (cancelSendRef.current) throw new Error("The transfer was cancelled.");
+        setExpanded(false);
         if (payload.paths.length > 1 && target.supportsFileBatch) {
           const stopProgress = await listen<FileBatchProgress>("link-file-batch-progress", ({ payload: progress }) => {
             setTransferProgress({ transferId: progress.batchId, fileName: progress.fileName,
@@ -3454,9 +3472,10 @@ function QuickShareWindow() {
               fileIndex: progress.fileIndex - 1, fileCount: progress.fileCount, targetName: target.name });
           });
           try {
-            await invoke("send_share_batch", { targetDeviceId: target.id, filePaths: payload.paths });
+            await invoke("send_share_batch", { targetDeviceId: target.id, filePaths: payload.paths, operationId });
           } finally { stopProgress(); }
         } else for (const [fileIndex, filePath] of payload.paths.entries()) {
+          if (cancelSendRef.current) throw new Error("The transfer was cancelled.");
           const transferId = newTransferId();
           const fileName = filePath.split(/[\\/]/).pop() || filePath;
           setTransferProgress({ transferId, fileName, transferredBytes: 0, totalBytes: 0, fileIndex, fileCount: payload.paths.length, targetName: target.name });
@@ -3465,7 +3484,7 @@ function QuickShareWindow() {
             setTransferProgress({ ...progress, fileIndex, fileCount: payload.paths.length, targetName: target.name });
           });
           try {
-            await invoke("send_share_file", { targetDeviceId: target.id, filePath, transferId });
+            await invoke("send_share_file", { targetDeviceId: target.id, filePath, transferId, operationId });
           } finally {
             stopProgress();
           }
@@ -3479,13 +3498,36 @@ function QuickShareWindow() {
       setSent(true);
       motion.current?.afterSuccess(dismissShelf);
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (cancelSendRef.current) setCancelledSend(true);
+      else setError(errorMessage(reason));
+      setExpanded(true);
       setTransferProgress(null);
     } finally {
+      if (operationId && operationStarted) await invoke("finish_share_send", { operationId }).catch(() => {});
+      sendOperationRef.current = null;
+      setSendingFiles(false);
+      setCancelRequested(false);
       busyRef.current = null;
       setBusy(null);
     }
   }
+
+  async function cancelSend() {
+    const operationId = sendOperationRef.current;
+    if (!operationId || cancelRequested) return;
+    cancelSendRef.current = true;
+    setCancelRequested(true);
+    try { await invoke("cancel_share_send", { operationId }); }
+    catch (reason) { setError(errorMessage(reason)); setCancelRequested(false); }
+  }
+
+  useEffect(() => {
+    const percent = sendingFiles ? sendProgressPercent(transferProgress) : null;
+    const now = Date.now();
+    if (percent !== null && percent < 100 && now - trayProgressAtRef.current < 250) return;
+    trayProgressAtRef.current = now;
+    void invoke("set_share_send_progress", { percent }).catch(() => {});
+  }, [sendingFiles, transferProgress]);
 
   const compatible = targets.filter((target) => !payload
     || (payload.kind === "files" && target.supportsFile)
@@ -3508,7 +3550,7 @@ function QuickShareWindow() {
         pointerInsideRef.current = false;
         clearTimeout(hoverTimer.current);
         void getCurrentWindow().isFocused().then((focused) => {
-          if (!pointerInsideRef.current && !focused && !busyRef.current && !payloadRef.current && !sentRef.current) setExpanded(false);
+          if (!pointerInsideRef.current && (busyRef.current || (!focused && !payloadRef.current && !sentRef.current))) setExpanded(false);
         });
         void invoke("set_quick_share_pointer_inside", { inside: false });
       }}
@@ -3529,18 +3571,21 @@ function QuickShareWindow() {
             aria-label={hasIncomingFiles ? (language === "ru" ? "Открыть входящие файлы" : "Open incoming files") : (language === "ru" ? "Открыть быструю отправку" : "Open quick share")}
             onClick={() => { motion.current?.interact(); setExpanded(true); }}
           >
-            <span className="quick-share-drop-glyph" aria-hidden>
+            {sendingFiles ? <span className="quick-share-compact-progress">
+              <TransferProgressRing progress={transferProgress ? { transferredBytes: sendProgressPercent(transferProgress), totalBytes: 100 } : { transferredBytes: 0, totalBytes: 0 }} compact />
+              <b>{sendProgressPercent(transferProgress)}%</b>
+            </span> : <span className="quick-share-drop-glyph" aria-hidden>
               <i />
               <Icon name="transfer" size={22} />
               <i />
-            </span>
+            </span>}
             {hasIncomingFiles && <span className="quick-share-incoming-count">{incomingFileCount(incoming, incomingBatches)}</span>}
           </button>
         )}
         {expanded && <div className="tray-share-titlebar">
           <span><Icon name="transfer" size={17} /></span>
           <div><b>{hasIncomingFiles && !payload ? (language === "ru" ? "Приём файлов" : "Receive files") : (language === "ru" ? "Быстрая отправка" : "Quick share")}</b><small>HomePlace Link</small></div>
-          <button type="button" disabled={busy !== null} aria-label={language === "ru" ? "Закрыть быструю отправку" : "Close quick share"} onClick={dismissShelf}>×</button>
+          <button type="button" aria-label={language === "ru" ? "Скрыть быструю отправку" : "Hide quick share"} onClick={dismissShelf}>×</button>
         </div>}
         {expanded && <div className="quick-share-panel">
           {(incoming.some(offer => offer.kind === "file") || incomingBatches.some(batch => batch.status === "offered" || batch.status === "accepted")) && <section className="quick-share-incoming" aria-label={language === "ru" ? "Входящие файлы" : "Incoming files"}>
@@ -3591,6 +3636,7 @@ function QuickShareWindow() {
             />
           )}
           {transferProgress && <TransferProgressPanel progress={transferProgress} language={language} />}
+          {sendingFiles && <button className="quick-share-cancel" type="button" disabled={cancelRequested} onClick={() => void cancelSend()}>{cancelRequested ? (language === "ru" ? "Останавливаем…" : "Stopping…") : (language === "ru" ? "Отменить отправку" : "Cancel send")}</button>}
           <button type="button" className="quick-share-exchange" disabled={!payload || busy !== null || (payload.kind === "files" && payload.paths.length !== 1)} onClick={() => {
             if (!payload) return;
             void invoke("open_exchange_window", {
@@ -3615,6 +3661,7 @@ function QuickShareWindow() {
           </div>
           </>}
           {sent && <p className="quick-share-success" role="status">{language === "ru" ? "Отправлено — получателю предложено принять." : "Sent — the recipient can accept it."}</p>}
+          {cancelledSend && <p role="status">{language === "ru" ? "Отправка остановлена. Уже доставленные файлы остаются у получателя." : "Send stopped. Files already delivered remain with the recipient."}</p>}
           {error && <div className="setting-error" role="alert"><p>{error}</p><button type="button" disabled={targetsLoading || busy !== null} onClick={loadTargets}>{language === "ru" ? "Обновить устройства" : "Refresh devices"}</button></div>}
         </div>}
       </section>

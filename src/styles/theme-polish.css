@@ -30,6 +30,17 @@
   background: var(--panel-soft);
 }
 .tray-share-root .quick-share-incoming article > div { flex-wrap: wrap; }
+.tray-share-root .quick-share-compact-progress { display: flex; align-items: center; gap: 7px; }
+.tray-share-root .quick-share-compact-progress b { font-size: 12px; font-variant-numeric: tabular-nums; }
+.tray-share-root .quick-share-cancel {
+  min-height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--panel-soft);
+  color: var(--text);
+  padding: 8px 14px;
+}
+.tray-share-root .quick-share-cancel:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
 @media (prefers-reduced-motion: reduce) {
   .tray-share-root .quick-share-targets > button > em { transition: none; }
   .tray-share-root .quick-share-targets > button:hover:not(:disabled) > em { transform: none; }
