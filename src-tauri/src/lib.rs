@@ -201,8 +201,7 @@ pub fn run() {
                 && window.app_handle().tray_by_id(tray::TRAY_ID).is_some()
             {
                 api.prevent_close();
-                let _ = window.hide();
-                tray::notify_window_hidden(window.app_handle());
+                tray::hide_main_window(window);
             }
         })
         .invoke_handler(tauri::generate_handler![

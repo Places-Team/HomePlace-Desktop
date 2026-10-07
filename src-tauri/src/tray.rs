@@ -396,10 +396,31 @@ pub fn refresh_menu<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn main_window_policy(visible: bool) -> tauri::ActivationPolicy {
+    if visible {
+        tauri::ActivationPolicy::Regular
+    } else {
+        tauri::ActivationPolicy::Accessory
+    }
+}
+
+pub fn hide_main_window<R: Runtime>(window: &tauri::Window<R>) {
+    // Switch only after the main window is hidden. Quick Share is an accessory
+    // panel and must not restore the Dock icon when it receives files.
+    if window.hide().is_ok() {
+        #[cfg(target_os = "macos")]
+        let _ = window.app_handle().set_activation_policy(main_window_policy(false));
+        notify_window_hidden(window.app_handle());
+    }
+}
+
 pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(main_window_policy(true));
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
@@ -517,6 +538,13 @@ fn menu_label(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hidden_main_window_uses_tray_only_activation() {
+        assert!(matches!(main_window_policy(false), tauri::ActivationPolicy::Accessory));
+        assert!(matches!(main_window_policy(true), tauri::ActivationPolicy::Regular));
+    }
 
     #[test]
     fn maps_only_known_tray_commands() {
