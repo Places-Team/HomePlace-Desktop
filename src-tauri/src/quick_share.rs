@@ -21,14 +21,14 @@ fn should_hide_idle_drag(current: bool, retained: bool) -> bool {
 }
 
 pub fn finish_drag<R: Runtime>(app: &AppHandle<R>) {
-    let epoch = EPOCH.0.load(Ordering::SeqCst);
+    let generation = crate::tray::quick_share_generation();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         // Allow the WebView drop handler to stage and pin the selection first.
         tokio::time::sleep(std::time::Duration::from_millis(750)).await;
         let callback_app = app.clone();
         let _ = app.run_on_main_thread(move || {
-            if should_hide_idle_drag(EPOCH.is_current(epoch), crate::tray::quick_share_retained()) {
+            if should_hide_idle_drag(generation == crate::tray::quick_share_generation(), crate::tray::quick_share_retained()) {
                 if let Some(window) = callback_app.get_webview_window("quick-share") {
                     let _ = window.set_ignore_cursor_events(true);
                     let _ = window.hide();

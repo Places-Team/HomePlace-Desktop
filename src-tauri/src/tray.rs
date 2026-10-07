@@ -1,6 +1,6 @@
 use std::sync::{
     Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use tauri::{
@@ -16,6 +16,7 @@ const PROFILE_CHANGED_EVENT: &str = "link-profile-changed";
 static BACKGROUND_NOTICE_SHOWN: AtomicBool = AtomicBool::new(false);
 static QUICK_SHARE_POINTER_INSIDE: AtomicBool = AtomicBool::new(false);
 static QUICK_SHARE_PINNED: AtomicBool = AtomicBool::new(false);
+static QUICK_SHARE_PRESENTATION: AtomicU64 = AtomicU64::new(0);
 static LAST_TRAY_RECT: Mutex<Option<Rect>> = Mutex::new(None);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -269,6 +270,10 @@ pub fn quick_share_retained() -> bool {
     QUICK_SHARE_PINNED.load(Ordering::Relaxed)
 }
 
+pub fn quick_share_generation() -> u64 {
+    QUICK_SHARE_PRESENTATION.load(Ordering::SeqCst)
+}
+
 pub fn show_quick_share_from_extension<R: Runtime>(app: &AppHandle<R>) {
     if let Some(rect) = quick_share_anchor(app) {
         show_quick_share(app, rect, true);
@@ -366,6 +371,7 @@ pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
 }
 
 fn show_quick_share<R: Runtime>(app: &AppHandle<R>, tray_rect: Rect, focus: bool) {
+    QUICK_SHARE_PRESENTATION.fetch_add(1, Ordering::SeqCst);
     let Some(window) = app.get_webview_window("quick-share") else {
         return;
     };
