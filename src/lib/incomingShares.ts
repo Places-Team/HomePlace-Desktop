@@ -14,3 +14,14 @@ export function groupIncomingFiles<T extends { id: string; kind: string; sourceN
   }
   return [...groups.values()];
 }
+export function incomingHintExpanded(visible: boolean, expanded: boolean, hasWork: boolean) {
+  return hasWork || (visible && expanded);
+}
+
+export function incomingFileCount<T extends { id: string; kind: string; sourceName: string }>(
+  offers: T[], batches: { status: string; files: { received: boolean }[] }[],
+) {
+  return groupIncomingFiles(offers).reduce((count, group) => count + group.files.length, 0)
+    + batches.filter(batch => batch.status === "offered" || batch.status === "accepted")
+      .reduce((count, batch) => count + batch.files.filter(file => !file.received).length, 0);
+}

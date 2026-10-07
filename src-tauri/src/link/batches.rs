@@ -613,7 +613,7 @@ pub async fn list_share_batches(app: AppHandle) -> Result<Vec<BatchInfo>, String
                 item.server_id == profile.server_id && item.batch_id.as_deref() == Some(&batch.id)
             });
             if !already_seen {
-                crate::tray::show_quick_share_from_extension(&app);
+                crate::tray::show_quick_share_incoming(&app);
                 update_local(
                     &app,
                     LocalBatch {

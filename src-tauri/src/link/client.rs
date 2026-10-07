@@ -3390,7 +3390,11 @@ fn sync_share_offers(
                 .iter()
                 .any(|offer| !matches!(offer.content, ShareContent::File(_))))
     {
-        crate::tray::show_quick_share_from_extension(app);
+        if new_offers.iter().any(|offer| matches!(offer.content, ShareContent::File(_))) {
+            crate::tray::show_quick_share_incoming(app);
+        } else {
+            crate::tray::show_quick_share_from_extension(app);
+        }
     }
     let file_count = new_offers
         .iter()
@@ -3768,6 +3772,11 @@ async fn save_received_file(
             .await
             .map_err(|_| "The temporary destination file could not be created.".to_string())?;
         let mut actual_size = 0usize;
+        let mut last_progress = std::time::Instant::now();
+        let _ = app.emit("link-file-receive-progress", FileTransferProgress {
+            transfer_id: offer.transfer_id.clone(), file_name: offer.filename.clone(),
+            transferred_bytes: 0, total_bytes: offer.size as u64,
+        });
         let mut hasher = Sha256::new();
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
@@ -3781,6 +3790,13 @@ async fn save_received_file(
             file.write_all(&chunk)
                 .await
                 .map_err(|_| "The shared file could not be saved.".to_string())?;
+            if last_progress.elapsed() >= std::time::Duration::from_millis(200) || actual_size == offer.size {
+                let _ = app.emit("link-file-receive-progress", FileTransferProgress {
+                    transfer_id: offer.transfer_id.clone(), file_name: offer.filename.clone(),
+                    transferred_bytes: actual_size as u64, total_bytes: offer.size as u64,
+                });
+                last_progress = std::time::Instant::now();
+            }
         }
         file.flush()
             .await

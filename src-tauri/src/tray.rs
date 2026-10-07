@@ -272,6 +272,18 @@ pub fn show_quick_share_from_extension<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Incoming consent is a quiet tray hint, never a focus-stealing popup.
+pub fn show_quick_share_incoming<R: Runtime>(app: &AppHandle<R>) {
+    let Some(window) = app.get_webview_window("quick-share") else { return; };
+    if window.is_visible().unwrap_or(false) { return; }
+    if !QUICK_SHARE_PINNED.load(Ordering::Relaxed) {
+        let _ = window.set_size(tauri::LogicalSize::new(104.0, 56.0));
+    }
+    if let Some(rect) = quick_share_anchor(app) {
+        show_quick_share(app, rect, false);
+    }
+}
+
 #[tauri::command]
 pub fn open_quick_share(app: AppHandle, text: Option<String>) -> Result<(), String> {
     if let Some(value) = text {

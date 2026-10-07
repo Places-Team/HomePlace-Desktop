@@ -1,7 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { groupIncomingFiles, shouldDismissIncomingShelf } from "./incomingShares";
+import { groupIncomingFiles, incomingFileCount, incomingHintExpanded, shouldDismissIncomingShelf } from "./incomingShares";
 
 describe("incoming file consent", () => {
+  it("shows a compact hint without collapsing an existing interaction", () => {
+    expect(incomingHintExpanded(false, true, false)).toBe(false);
+    expect(incomingHintExpanded(true, true, false)).toBe(true);
+    expect(incomingHintExpanded(false, false, true)).toBe(true);
+  });
+  it("counts only actionable files and deduplicates legacy offers", () => {
+    expect(incomingFileCount([
+      { id: "1", kind: "file", sourceName: "Phone" },
+      { id: "1", kind: "file", sourceName: "Phone" },
+      { id: "2", kind: "text", sourceName: "Phone" },
+    ], [
+      { status: "offered", files: [{ received: false }, { received: false }] },
+      { status: "accepted", files: [{ received: true }, { received: false }] },
+      { status: "completed", files: [{ received: true }] },
+    ])).toBe(4);
+  });
   it("dismisses a resolved inbox, but not a new empty shelf", () => {
     expect(shouldDismissIncomingShelf(true, false, false, false, false)).toBe(true);
     expect(shouldDismissIncomingShelf(false, false, false, false, false)).toBe(false);
