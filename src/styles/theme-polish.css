@@ -1,6 +1,8 @@
 /* Contrast and warm accent pass for both desktop themes. */
 /* Tray controls have native rounded geometry; hover motion stays inside each row. */
-.tray-share-root .quick-share-shelf { border-radius: 22px; }
+.tray-share-root .quick-share-shelf,
+.tray-share-root.expanded .quick-share-shelf { border-radius: 22px; }
+.tray-share-root.dragging.expanded .quick-share-copy { border-radius: 14px; }
 .tray-share-root:not(.expanded) .quick-share-shelf { border-radius: 18px; }
 .tray-share-root .tray-share-titlebar > span { border-radius: 12px; }
 .tray-share-root .tray-share-titlebar button { border-radius: 50%; }
