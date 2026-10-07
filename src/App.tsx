@@ -3333,7 +3333,13 @@ function QuickShareWindow() {
         loadTargets();
       }
     }).then((unlisten) => {
-      if (cancelled) unlisten(); else stopOpen = unlisten;
+      if (cancelled) unlisten(); else {
+        stopOpen = unlisten;
+        // Recover a show that happened before this hidden WebView was ready.
+        void getCurrentWindow().isVisible().then((shown) => {
+          if (!cancelled && shown) motion.current?.open();
+        }).catch(reason => { if (!cancelled) setError(errorMessage(reason)); });
+      }
     });
     void listen<boolean>("quick-share-close-requested", ({ payload: explicit }) => {
       if (!cancelled && !busyRef.current && (explicit || (!payloadRef.current && !sentRef.current && !errorRef.current))) motion.current?.close(explicit);
@@ -3347,9 +3353,6 @@ function QuickShareWindow() {
       }
     }).then((unlisten) => {
       if (cancelled) unlisten(); else stopBlur = unlisten;
-    });
-    void getCurrentWindow().isVisible().then((shown) => {
-      if (!cancelled && shown) motion.current?.open();
     });
     void listen<string>("quick-share-stage-text", ({ payload: stagedText }) => {
       if (!cancelled) stageText(stagedText);
@@ -3492,7 +3495,9 @@ function QuickShareWindow() {
     <main
       className={`tray-share-root${visible ? " visible" : " closing"}${expanded ? " expanded" : ""}${dragging ? " dragging" : ""}${busy ? " sending" : ""}${sent ? " sent" : ""}`}
       aria-busy={busy !== null}
+      onFocusCapture={() => motion.current?.open()}
       onMouseEnter={() => {
+        motion.current?.open();
         pointerInsideRef.current = true;
         clearTimeout(hoverTimer.current);
         hoverTimer.current = setTimeout(() => setExpanded(true), 100);
@@ -3521,7 +3526,7 @@ function QuickShareWindow() {
             type="button"
             className="quick-share-handle"
             aria-label={hasIncomingFiles ? (language === "ru" ? "Открыть входящие файлы" : "Open incoming files") : (language === "ru" ? "Открыть быструю отправку" : "Open quick share")}
-            onClick={() => setExpanded(true)}
+            onClick={() => { motion.current?.open(); setExpanded(true); }}
           >
             <span className="quick-share-drop-glyph" aria-hidden>
               <i />

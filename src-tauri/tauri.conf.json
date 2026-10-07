@@ -43,6 +43,7 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visibleOnAllWorkspaces": true,
+        "backgroundThrottling": "disabled",
         "transparent": true,
         "shadow": false,
         "backgroundColor": "#00000000"

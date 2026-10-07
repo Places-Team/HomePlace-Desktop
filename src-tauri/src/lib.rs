@@ -177,6 +177,9 @@ pub fn run() {
                     tauri::WindowEvent::Focused(focused) => {
                         if *focused {
                             QUICK_SHARE_WAS_FOCUSED.store(true, Ordering::Relaxed);
+                            // macOS can restore a shelf independently of the tray's show event.
+                            // Restore the painted frontend as well, not just its native window.
+                            let _ = window.emit("quick-share-opened", true);
                         } else if QUICK_SHARE_WAS_FOCUSED.swap(false, Ordering::Relaxed)
                             && window.is_visible().unwrap_or(false)
                         {
