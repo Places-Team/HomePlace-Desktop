@@ -3412,10 +3412,11 @@ function QuickShareWindow() {
   }, [loadTargets, stageFiles, stageText]);
 
   useEffect(() => {
+    if (!visible) return;
     void invoke("set_quick_share_expanded", { expanded }).catch((reason) => {
       setError(errorMessage(reason));
     });
-  }, [expanded]);
+  }, [expanded, visible]);
 
   useEffect(() => {
     void invoke("set_quick_share_pinned", { pinned: hasIncomingFiles || payload !== null || busy !== null || sent || error !== null }).catch((reason) => {
@@ -3495,9 +3496,9 @@ function QuickShareWindow() {
     <main
       className={`tray-share-root${visible ? " visible" : " closing"}${expanded ? " expanded" : ""}${dragging ? " dragging" : ""}${busy ? " sending" : ""}${sent ? " sent" : ""}`}
       aria-busy={busy !== null}
-      onFocusCapture={() => motion.current?.open()}
+      onFocusCapture={() => motion.current?.interact()}
       onMouseEnter={() => {
-        motion.current?.open();
+        motion.current?.interact();
         pointerInsideRef.current = true;
         clearTimeout(hoverTimer.current);
         hoverTimer.current = setTimeout(() => setExpanded(true), 100);
@@ -3526,7 +3527,7 @@ function QuickShareWindow() {
             type="button"
             className="quick-share-handle"
             aria-label={hasIncomingFiles ? (language === "ru" ? "Открыть входящие файлы" : "Open incoming files") : (language === "ru" ? "Открыть быструю отправку" : "Open quick share")}
-            onClick={() => { motion.current?.open(); setExpanded(true); }}
+            onClick={() => { motion.current?.interact(); setExpanded(true); }}
           >
             <span className="quick-share-drop-glyph" aria-hidden>
               <i />

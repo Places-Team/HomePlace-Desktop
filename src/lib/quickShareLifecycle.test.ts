@@ -4,6 +4,15 @@ import { QuickShareLifecycle } from "./quickShareLifecycle";
 afterEach(() => vi.useRealTimers());
 
 describe("Quick Share dismissal", () => {
+  it("does not enqueue redundant native opens while interacting with the shelf", () => {
+    const native = vi.fn();
+    const shelf = new QuickShareLifecycle(vi.fn(), vi.fn(), native);
+    shelf.open();
+    shelf.interact();
+    shelf.close();
+    expect(native.mock.calls).toEqual([[true], [false]]);
+    shelf.dispose();
+  });
   it("closes an empty shelf after releasing a drag without dropping", () => {
     vi.useFakeTimers();
     const hide = vi.fn();

@@ -55,10 +55,8 @@ fn set_quick_share_expanded(window: tauri::WebviewWindow, expanded: bool) -> Res
     let old_size = window
         .outer_size()
         .map_err(|_| "Could not read the quick-share size.".to_string())?;
-    let logical_size = if expanded {
-        tauri::LogicalSize::new(420.0, 500.0)
-    } else {
-        tauri::LogicalSize::new(104.0, 56.0)
+    let Some(logical_size) = quick_share::shelf_geometry(window.is_visible().unwrap_or(false), expanded) else {
+        return Ok(());
     };
     let physical_size = logical_size.to_physical::<u32>(scale);
     let monitor = window

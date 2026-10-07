@@ -16,6 +16,14 @@ impl VisibilityEpoch {
 static EPOCH: VisibilityEpoch = VisibilityEpoch::new();
 const EXIT_MS: u64 = 120;
 
+pub fn shelf_geometry(visible: bool, expanded: bool) -> Option<tauri::LogicalSize<f64>> {
+    visible.then(|| if expanded {
+        tauri::LogicalSize::new(420.0, 500.0)
+    } else {
+        tauri::LogicalSize::new(104.0, 56.0)
+    })
+}
+
 fn should_hide_idle_drag(current: bool, retained: bool) -> bool {
     current && !retained
 }
@@ -116,6 +124,14 @@ pub fn focus_quick_share(window: WebviewWindow) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_shelves_never_receive_resize_geometry() {
+        assert!(shelf_geometry(false, false).is_none());
+        assert!(shelf_geometry(false, true).is_none());
+        assert_eq!(shelf_geometry(true, false), Some(tauri::LogicalSize::new(104.0, 56.0)));
+        assert_eq!(shelf_geometry(true, true), Some(tauri::LogicalSize::new(420.0, 500.0)));
+    }
 
     #[test]
     fn drag_cleanup_preserves_new_interactions_and_retained_content() {
