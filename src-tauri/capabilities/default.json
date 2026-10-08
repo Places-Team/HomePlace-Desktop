@@ -3,5 +3,12 @@
   "identifier": "default",
   "description": "Core permissions for the HomePlace Desktop windows",
   "windows": ["main", "quick-share"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-set-decorations",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-start-dragging"
+  ]
 }

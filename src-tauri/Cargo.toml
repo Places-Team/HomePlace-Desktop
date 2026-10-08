@@ -33,7 +33,7 @@ time = { version = "0.3", features = ["parsing"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }
 url = "2"
-uuid = "1"
+uuid = { version = "1", features = ["v4"] }
 zeroize = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -42,6 +42,8 @@ keyring = { version = "3.6", features = ["apple-native"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }
+windows = { version = "0.61.3", features = ["Win32_Graphics_Dwm"] }
+winreg = "0.55"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6", features = ["crypto-rust", "linux-native-sync-persistent", "vendored"] }

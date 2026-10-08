@@ -166,7 +166,7 @@ export function ServerWorkspace({ kind, language, activeServerId, onOpenConnecti
     }
   }
 
-  if (!activeServerId) return <div className="workspace-state"><Icon name="link" size={24} /><h2>{ru ? "Подключите HomePlace" : "Connect HomePlace"}</h2><p>{ru ? "Привяжите этот компьютер в настройках, чтобы видеть данные сервера." : "Pair this computer in Settings to see server data."}</p><button type="button" className="workspace-refresh" onClick={onOpenConnections}>{ru ? "Открыть подключения" : "Open connections"}</button></div>;
+  if (!activeServerId) return <div className="workspace-state"><Icon name="link" size={24} /><h2>{ru ? "Подключите HomePlace" : "Connect HomePlace"}</h2><button type="button" className="workspace-refresh" onClick={onOpenConnections}>{ru ? "Открыть подключения" : "Open connections"}</button></div>;
 
   const monitoring = overview?.monitoring;
   const requests = overview?.requests;

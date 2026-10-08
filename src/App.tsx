@@ -2,8 +2,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { FormEvent, Fragment, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { FormEvent, Fragment, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "./components/Icon";
+import { WindowControls } from "./components/WindowControls";
+import { SharedTransfers } from "./components/SharedTransfers";
+import { sendShared, useSharedTransfers } from "./lib/sharedTransfers";
 import { IdeasBoard } from "./components/IdeasBoard";
 import { HomeOverview } from "./components/HomeOverview";
 import { NotificationHistory } from "./components/NotificationHistory";
@@ -16,6 +19,7 @@ import { copy, type Language } from "./lib/i18n";
 import { fallbackPlatformInfo, type PlatformInfo } from "./lib/platform";
 import { fileLimitLabel, useFileTransferLimit } from "./lib/useFileTransferLimit";
 import { QuickShareLifecycle } from "./lib/quickShareLifecycle";
+import { DeferredInbox } from "./lib/deferredInbox";
 import { sendProgressPercent } from "./lib/shareSendProgress";
 import { groupIncomingFiles, incomingFileCount, incomingHintExpanded, shouldDismissIncomingShelf } from "./lib/incomingShares";
 
@@ -169,15 +173,11 @@ type ShareBatch = {
 
 type LocalBatchSummary = { requestKey: string; batchId: string | null; targetDeviceId: string; fileCount: number; sending: boolean };
 
-type ActiveTransferProgress = FileTransferProgress & {
-  fileIndex: number;
-  fileCount: number;
-  targetName: string;
-};
 
 type PendingNativeShare = {
   files: string[];
   text?: string | null;
+  error?: string | null;
 };
 
 type ExchangeStage = { text?: string | null; filePath?: string | null };
@@ -257,6 +257,15 @@ function errorMessage(error: unknown): string {
     : "The HomePlace request could not be completed.";
 }
 
+function requiresPairingApproval(message: string | null): boolean {
+  return Boolean(message && (message.includes("not approved") || message.includes("Pair the device again") || message.includes("Pair this device again")));
+}
+
+function unavailableShareDevices(targets: ShareTarget[], devices: AccountDevice[]): AccountDevice[] {
+  const targetIds = new Set(targets.map((target) => target.id));
+  return devices.filter((device) => !device.currentDevice && !targetIds.has(device.id));
+}
+
 function deviceCountLabel(count: number, language: Language): string {
   if (language === "en") return `${count} ${count === 1 ? "device" : "devices"}`;
   const remainder100 = count % 100;
@@ -271,9 +280,6 @@ function deviceCountLabel(count: number, language: Language): string {
   return `${count} ${noun}`;
 }
 
-function newTransferId(): string {
-  return crypto.randomUUID().replaceAll("-", "");
-}
 
 function formatTransferBytes(value: number): string {
   if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(value >= 100 * 1024 * 1024 ? 0 : 1)} MiB`;
@@ -305,26 +311,6 @@ function TransferProgressRing({ progress, compact = false }: { progress: Pick<Fi
   );
 }
 
-function TransferProgressPanel({ progress, language }: { progress: ActiveTransferProgress; language: Language }) {
-  const preparing = progress.totalBytes <= 0;
-  const percent = progress.totalBytes > 0
-    ? Math.min(100, Math.round((progress.transferredBytes / progress.totalBytes) * 100))
-    : 0;
-  return (
-    <div className={`file-transfer-progress${preparing ? " preparing" : ""}${percent === 100 ? " finalizing" : ""}`} role="status" aria-live="polite">
-      <TransferProgressRing progress={progress} />
-      <div className="file-transfer-progress-copy">
-        <b>{language === "ru" ? `Отправка на ${progress.targetName}` : `Sending to ${progress.targetName}`}</b>
-        <span>{progress.fileName}</span>
-        <div className="file-transfer-progress-line"><i style={{ width: `${percent}%` }} /></div>
-        <small>{preparing
-          ? (language === "ru" ? "Подготовка защищённой передачи…" : "Preparing secure transfer…")
-          : <>{formatTransferBytes(progress.transferredBytes)} / {formatTransferBytes(progress.totalBytes)}{progress.fileCount > 1 && ` · ${progress.fileIndex + 1}/${progress.fileCount}`}</>}
-        </small>
-      </div>
-    </div>
-  );
-}
 
 function progressIndex(state: ConnectionState): number {
   if (state === "connected") return 3;
@@ -389,11 +375,13 @@ export function App() {
   useLayoutEffect(() => {
     document.documentElement.dataset.window = windowLabel;
     document.documentElement.dataset.theme = storedTheme();
+    document.documentElement.dataset.platform = fallbackPlatformInfo(navigator.userAgent).platform;
   }, [windowLabel]);
   return windowLabel === "quick-share" ? <QuickShareWindow /> : <MainApp />;
 }
 
 function MainApp() {
+  const sharedTransfers = useSharedTransfers();
   const [activeSection, setActiveSection] = useState<AppSection>("overview");
   const [requestedPlantId, setRequestedPlantId] = useState<string | null>(null);
   const [transferMode, setTransferMode] = useState<"devices" | "exchange">("devices");
@@ -716,6 +704,27 @@ function MainApp() {
       stopListening?.();
     };
   }, [activeSection]);
+
+  useEffect(() => {
+    if (!isTauriRuntime) return;
+    let disposed = false;
+    const stops: (() => void)[] = [];
+    void Promise.all([
+      listen<string>("clipboard-sync-error", ({ payload }) => {
+        if (!disposed) setClipboardSyncError(payload);
+      }),
+      listen("clipboard-sync-restored", () => {
+        if (!disposed) setClipboardSyncError(null);
+      }),
+    ]).then((unlisteners) => {
+      if (disposed) unlisteners.forEach((stop) => stop());
+      else stops.push(...unlisteners);
+    });
+    return () => {
+      disposed = true;
+      stops.forEach((stop) => stop());
+    };
+  }, []);
 
   useEffect(() => {
     if (!isTauriRuntime) return;
@@ -1120,6 +1129,23 @@ function MainApp() {
       setServer(null);
       setPairing(null);
       setState("not-configured");
+    }
+  }
+
+  function handleTitlebarPointerDown(event: ReactPointerEvent<HTMLElement>) {
+    if (platform.platform !== "windows" || event.button !== 0) return;
+    if (event.detail > 1) return;
+    if ((event.target as HTMLElement).closest("button, input, select, textarea, a")) return;
+    event.preventDefault();
+    void invoke("start_window_drag").catch(() => undefined);
+  }
+
+  function handleTitlebarDoubleClick(event: ReactMouseEvent<HTMLElement>) {
+    if (platform.platform !== "windows" || (event.target as HTMLElement).closest("button")) return;
+    try {
+      void getCurrentWindow().toggleMaximize().catch(() => undefined);
+    } catch {
+      // The browser-only Vite preview has no native window to maximize.
     }
   }
 
@@ -1840,11 +1866,9 @@ function MainApp() {
       <div className="ambient ambient-two" />
       <div
         className="window-drag-region"
-        data-tauri-drag-region
         aria-hidden
-        onMouseDown={(event) => {
-          if (event.button === 0) void invoke("start_window_drag");
-        }}
+        onPointerDown={handleTitlebarPointerDown}
+        onDoubleClick={handleTitlebarDoubleClick}
       />
 
       <aside
@@ -1857,7 +1881,7 @@ function MainApp() {
         onFocus={() => setSidebarExpanded(true)}
         onBlur={(event) => {
           if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
-            if (!sidebarPinned) setSidebarExpanded(false);
+            if (!sidebarPinned && !event.currentTarget.matches(":hover")) setSidebarExpanded(false);
           }
         }}
       >
@@ -1927,7 +1951,7 @@ function MainApp() {
 
       <div className="app-content">
 
-      <header className="titlebar" data-tauri-drag-region>
+      <header className="titlebar" onPointerDown={handleTitlebarPointerDown} onDoubleClick={handleTitlebarDoubleClick}>
         <div className="titlebar-heading">
           <span className="titlebar-section-icon" aria-hidden>
             <Icon name={navigation.find((item) => item.id === activeSection)?.icon ?? "home"} size={21} />
@@ -1949,14 +1973,12 @@ function MainApp() {
                 ? (language === "ru" ? "Синхронизация включена" : "Sync is on")
                 : (language === "ru" ? "Синхронизация выключена" : "Sync is off"))}
               {activeSection === "transfers" && (language === "ru"
-                ? `${offers.length} входящих · ${transferHistory.length} в истории`
-                : `${offers.length} incoming · ${transferHistory.length} in history`)}
+                ? `${offers.length} входящих · ${transferHistory.length + sharedTransfers.transfers.filter(item => item.status !== "sending").length} в истории`
+                : `${offers.length} incoming · ${transferHistory.length + sharedTransfers.transfers.filter(item => item.status !== "sending").length} in history`)}
               {activeSection === "automations" && (language === "ru" ? "Пока недоступны в Desktop" : "Not available in Desktop yet")}
               {activeSection === "productivity" && (language === "ru"
                 ? (activeServerId ? `${reminders.length} напоминаний · ${calendarEvents.length} событий` : "Календарь, напоминания и идеи")
                 : (activeServerId ? `${reminders.length} reminders · ${calendarEvents.length} events` : "Calendar, reminders and ideas"))}
-              {activeSection === "media" && (language === "ru" ? "Поиск, запросы и очередь загрузок" : "Search, requests and download queue")}
-              {activeSection === "monitoring" && (language === "ru" ? "Контейнеры, сервисы и события" : "Containers, services and events")}
               {activeSection === "notifications" && (notificationFailures > 0
                 ? (language === "ru" ? `${notificationFailures} требуют внимания` : `${notificationFailures} need attention`)
                 : (language === "ru" ? "Ошибок доставки нет" : "No delivery issues"))}
@@ -2001,9 +2023,11 @@ function MainApp() {
             <button type="button" className={language === "ru" ? "active" : undefined} onClick={() => setLanguage("ru")}>RU</button>
             <button type="button" className={language === "en" ? "active" : undefined} onClick={() => setLanguage("en")}>EN</button>
           </div>
-          <span className="platform-pill">{platform.label}</span>
+          <span className="platform-pill" title={`${platform.label} ${platform.platformVersion}`}>{platform.label}</span>
+          {platform.platform === "windows" && <WindowControls language={language} />}
         </div>
       </header>
+      <SharedTransfers language={language} history={activeSection === "transfers"} />
 
       {activeSection === "devices" && (
         <section className="section-stack account-devices-page" aria-label={ui.nav.devices}>
@@ -2220,6 +2244,9 @@ function MainApp() {
                 <button type="button" disabled={busy} onClick={() => { setError(null); setState("verified"); }}>{language === "ru" ? "Подтвердить новые возможности" : "Approve new capabilities"}</button>
               </div>
             )}
+            <button className="secondary-action" type="button" disabled={busy} onClick={() => { setError(null); setState("verified"); }}>
+              {language === "ru" ? "Обновить разрешения" : "Renew permissions"}
+            </button>
             <p>
             {ui.devices.credential} {platform.secureStorage}. {ui.devices.background}
             </p>
@@ -2351,9 +2378,7 @@ function MainApp() {
           {!activeServerId ? (
             <article className="overview-start">
               <span className="overview-start-mark"><Icon name="link" size={28} /></span>
-              <p className="eyebrow">HOMEPLACE LINK</p>
-              <h2>{language === "ru" ? "Ваши устройства — в одном месте" : "Your devices, in one place"}</h2>
-              <p>{language === "ru" ? "Подключите свой сервер HomePlace, чтобы видеть устройства, передачи, медиа и состояние сервисов." : "Connect your HomePlace server to see devices, transfers, media and service health."}</p>
+              <h2>{language === "ru" ? "Подключить HomePlace" : "Connect HomePlace"}</h2>
               <button type="button" className="primary-action" onClick={() => setActiveSection("settings")}>{language === "ru" ? "Подключить сервер" : "Connect a server"}<Icon name="link" size={17} /></button>
             </article>
           ) : <>
@@ -2377,13 +2402,13 @@ function MainApp() {
 
           <section className="quick-actions" aria-label="Quick actions">
             <button type="button" onClick={() => setActiveSection("clipboard")}>
-              <span><Icon name="clipboard" size={18} /></span><b>{ui.overview.clipboard}</b><small>{ui.overview.sync}</small>
+              <span><Icon name="clipboard" size={18} /></span><b>{ui.overview.clipboard}</b>
             </button>
             <button type="button" onClick={() => setActiveSection("transfers")}>
-              <span><Icon name="transfer" size={18} /></span><b>{ui.overview.send}</b><small>{ui.overview.transfer}</small>
+              <span><Icon name="transfer" size={18} /></span><b>{ui.overview.send}</b>
             </button>
             <button type="button" onClick={() => setActiveSection("monitoring")}>
-              <span><Icon name="monitoring" size={18} /></span><b>{ui.nav.monitoring}</b><small>{language === "ru" ? "Состояние сервера" : "Server health"}</small>
+              <span><Icon name="monitoring" size={18} /></span><b>{ui.nav.monitoring}</b>
             </button>
           </section>
           <HomeOverview key={activeServerId} serverId={activeServerId} language={language} onNavigate={setActiveSection} requestedPlantId={requestedPlantId} onPlantRequestHandled={() => setRequestedPlantId(null)} />
@@ -2393,7 +2418,7 @@ function MainApp() {
 
       {activeSection === "clipboard" && (
         <section className="section-stack" aria-label="Clipboard">
-          {clipboardSyncError && <p className="setting-error">{clipboardSyncError}</p>}
+          {clipboardSyncError && <div className="setting-error" role="alert"><p>{clipboardSyncError}</p>{requiresPairingApproval(clipboardSyncError) && <button type="button" onClick={() => setActiveSection("settings")}>{language === "ru" ? "Обновить разрешения" : "Renew permissions"}</button>}</div>}
           <article className="glass-card transfer-list clipboard-history">
             <div className="section-heading">
               <div><p className="eyebrow">{ui.clipboard.eyebrow}</p><h3>{language === "ru" ? "История буфера" : "Clipboard history"}</h3></div>
@@ -2480,7 +2505,7 @@ function MainApp() {
           <article className="glass-card transfer-list">
             <div className="section-heading"><div><p className="eyebrow">{ui.transfers.inbox}</p><h3>{ui.transfers.waiting}</h3></div><span>{offers.length}</span></div>
             {offers.length === 0 ? (
-              <div className="empty-state"><span><Icon name="check" size={19} /></span><b>{ui.transfers.empty}</b><p>{ui.transfers.emptyHint}</p></div>
+              <div className="empty-state"><span><Icon name="check" size={19} /></span><b>{ui.transfers.empty}</b></div>
             ) : offers.map((offer) => (
               <div
                 className="transfer-row"
@@ -2568,7 +2593,7 @@ function MainApp() {
             <span className="overview-start-mark"><Icon name="automation" size={27} /></span>
             <p className="eyebrow">HOMEPLACE LINK</p>
             <h2>{language === "ru" ? "Правила между устройствами" : "Rules between devices"}</h2>
-            <p>{language === "ru" ? "Автоматизации ещё не доступны в Desktop. Здесь появятся сценарии для устройств и домашних сервисов, когда сервер начнёт ими управлять." : "Desktop automations are not available yet. Device and home-service rules will appear here when the server supports them."}</p>
+            <p>{language === "ru" ? "Пока недоступно" : "Not available yet"}</p>
           </article>
         </section>
       )}
@@ -2816,7 +2841,7 @@ function MainApp() {
           </section>
           <article className="glass-card settings-panel">
             <div className="section-heading"><div><p className="eyebrow">{ui.notifications.delivery}</p><h3>{ui.notifications.routes}</h3></div></div>
-            <label className="settings-row"><span><b>{ui.notifications.desktop}</b><small>{ui.notifications.desktopHint}</small></span><input type="checkbox" checked={systemNotificationsEnabled} disabled={!systemNotificationsLoaded || systemNotificationsBusy || !activeServerId} onChange={(event) => void updateSystemNotifications(event.target.checked)} /></label>
+            <label className="settings-row"><span><b>{ui.notifications.desktop}</b></span><input type="checkbox" checked={systemNotificationsEnabled} disabled={!systemNotificationsLoaded || systemNotificationsBusy || !activeServerId} onChange={(event) => void updateSystemNotifications(event.target.checked)} /></label>
             {systemNotificationsError && <p className="setting-error" role="alert">{systemNotificationsError}</p>}
           </article>
           <NotificationHistory key={activeServerId ?? "unpaired"} language={language} activeServerId={activeServerId} onOpenPlant={(id) => { setRequestedPlantId(id); setActiveSection("overview"); }} />
@@ -2848,7 +2873,7 @@ function MainApp() {
           </article>
           <article className="glass-card settings-panel">
             <div className="section-heading"><div><p className="eyebrow">{ui.settings.application}</p><h3>{ui.settings.general}</h3></div></div>
-            <label className="settings-row"><span><b>{ui.settings.startup}</b><small>{ui.settings.startupHint}</small></span><input type="checkbox" checked={startupEnabled} disabled={!startupLoaded || startupBusy} onChange={(event) => void updateStartup(event.target.checked)} /></label>
+            <label className="settings-row"><span><b>{ui.settings.startup}</b></span><input type="checkbox" checked={startupEnabled} disabled={!startupLoaded || startupBusy} onChange={(event) => void updateStartup(event.target.checked)} /></label>
             <label className="settings-row"><span><b>{ui.settings.clipboard}</b><small>{ui.settings.clipboardHint}</small></span><input type="checkbox" checked={clipboardSyncEnabled} disabled={!clipboardSyncLoaded || clipboardSyncBusy || !activeServerId} onChange={(event) => void updateClipboardSync(event.target.checked)} /></label>
             {(startupError || clipboardSyncError) && <p className="setting-error">{startupError ?? clipboardSyncError}</p>}
           </article>
@@ -2958,29 +2983,43 @@ function MainApp() {
 }
 
 function ShareComposer({ language }: { language: Language }) {
+  const shared = useSharedTransfers();
+  const sending = shared.transfers.some(item => item.status === "sending");
+  const sendLock = useRef(false);
+  const composerBusy = useRef(false);
+  useLayoutEffect(() => { composerBusy.current = sending; }, [sending]);
   const fileLimit = useFileTransferLimit();
   const [targets, setTargets] = useState<ShareTarget[]>([]);
+  const [knownDevices, setKnownDevices] = useState<AccountDevice[]>([]);
   const [files, setFiles] = useState<string[]>([]);
   const [text, setText] = useState("");
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
-  const [transferProgress, setTransferProgress] = useState<ActiveTransferProgress | null>(null);
 
   function loadTargets() {
-    void invoke<ShareTarget[]>("list_share_targets")
-      .then(setTargets)
-      .catch((reason) => setError(errorMessage(reason)));
+    void Promise.allSettled([
+      invoke<ShareTarget[]>("list_share_targets"),
+      invoke<AccountDevice[]>("list_account_devices"),
+    ]).then(([targetResult, deviceResult]) => {
+      if (targetResult.status === "fulfilled") setTargets(targetResult.value);
+      else setError(errorMessage(targetResult.reason));
+      if (deviceResult.status === "fulfilled") setKnownDevices(deviceResult.value);
+    });
   }
 
   function stageFiles(paths: string[]) {
-    const unique = [...new Set(paths)].slice(0, 20);
+    if (sendLock.current || composerBusy.current) return;
+    const unique = [...new Set(paths)];
+    if (unique.length > 20) {
+      setError("A maximum of 20 files can be sent at once.");
+      return;
+    }
     if (unique.length === 0) return;
     setFiles(unique);
     setText("");
     setSent(false);
-    setTransferProgress(null);
     setError(null);
   }
 
@@ -3019,52 +3058,22 @@ function ShareComposer({ language }: { language: Language }) {
 
   async function send(target: ShareTarget) {
     const trimmed = text.trim();
-    if (busy || (files.length === 0 && !trimmed)) return;
+    if (sendLock.current || sending || (files.length === 0 && !trimmed)) return;
+    sendLock.current = true;
     setBusy(target.id);
     setSent(false);
-    setTransferProgress(null);
     setError(null);
     try {
-      if (files.length > 0) {
-      if (files.length > 1 && target.supportsFileBatch) {
-          const stopProgress = await listen<FileBatchProgress>("link-file-batch-progress", ({ payload: progress }) => {
-            setTransferProgress({ transferId: progress.batchId, fileName: progress.fileName,
-              transferredBytes: progress.transferredBytes, totalBytes: progress.totalBytes,
-              fileIndex: progress.fileIndex - 1, fileCount: progress.fileCount, targetName: target.name });
-          });
-          try {
-            await invoke("send_share_batch", { targetDeviceId: target.id, filePaths: files });
-          } finally { stopProgress(); }
-        } else for (const [fileIndex, filePath] of files.entries()) {
-          const transferId = newTransferId();
-          const fileName = filePath.split(/[\\/]/).pop() || filePath;
-          setTransferProgress({ transferId, fileName, transferredBytes: 0, totalBytes: 0, fileIndex, fileCount: files.length, targetName: target.name });
-          const stopProgress = await listen<FileTransferProgress>("link-file-transfer-progress", ({ payload: progress }) => {
-            if (progress.transferId !== transferId) return;
-            setTransferProgress({ ...progress, fileIndex, fileCount: files.length, targetName: target.name });
-          });
-          try {
-            await invoke("send_share_file", { targetDeviceId: target.id, filePath, transferId });
-          } finally {
-            stopProgress();
-          }
-        }
-      } else {
-        await invoke("send_share_text", {
-          targetDeviceId: target.id,
-          kind: /^https?:\/\/\S+$/i.test(trimmed) ? "url" : "text",
-          value: trimmed,
-        });
-      }
+      await sendShared(files.length ? { kind: "files", paths: files } : { kind: /^https?:\/\/\S+$/i.test(trimmed) ? "url" : "text", value: trimmed }, target);
       setFiles([]);
       setText("");
       setSent(true);
-      setTransferProgress(null);
       loadTargets();
     } catch (reason) {
-      setError(errorMessage(reason));
-      setTransferProgress(null);
+      const message = errorMessage(reason);
+      if (message !== "The transfer was cancelled.") setError(message);
     } finally {
+      sendLock.current = false;
       setBusy(null);
     }
   }
@@ -3075,13 +3084,13 @@ function ShareComposer({ language }: { language: Language }) {
     : /^https?:\/\/\S+$/i.test(text.trim())
       ? target.supportsUrl
       : target.supportsText);
+  const needsApproval = unavailableShareDevices(targets, knownDevices);
 
   return (
     <article className="glass-card share-composer">
       <div className="section-heading">
         <div>
-          <p className="eyebrow">{language === "ru" ? "Новая передача" : "New transfer"}</p>
-          <h3>{language === "ru" ? "Отправить файл, текст или ссылку" : "Send a file, text, or link"}</h3>
+          <h3>{language === "ru" ? "Отправить" : "Send"}</h3>
         </div>
         <span>{files.length > 0 ? files.length : hasPayload ? 1 : 0}</span>
       </div>
@@ -3089,10 +3098,12 @@ function ShareComposer({ language }: { language: Language }) {
       <button
         type="button"
         className={`share-drop-zone${dragging ? " dragging" : ""}`}
+        disabled={busy !== null || sending}
         onClick={() => void chooseFiles()}
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => {
           event.preventDefault();
+          if (sendLock.current || composerBusy.current) return;
           const dropped = event.dataTransfer.getData("text/plain");
           if (dropped) {
             setFiles([]);
@@ -3112,14 +3123,16 @@ function ShareComposer({ language }: { language: Language }) {
           {files.map((filePath) => (
             <div className="quick-share-payload" key={filePath}>
               <Icon name="transfer" size={17} />
-              <span><b>{filePath.split(/[\\/]/).pop() || filePath}</b><small>{language === "ru" ? "Готов к отправке" : "Ready to send"}</small></span>
-              <button type="button" onClick={() => setFiles((current) => current.filter((path) => path !== filePath))}>×</button>
+              <span><b>{filePath.split(/[\\/]/).pop() || filePath}</b></span>
+              <button type="button" disabled={busy !== null || sending} aria-label={language === "ru" ? "Убрать файл" : "Remove file"} onClick={() => setFiles((current) => current.filter((path) => path !== filePath))}>×</button>
             </div>
           ))}
         </div>
       ) : (
         <textarea
           value={text}
+          disabled={busy !== null || sending}
+          aria-label={language === "ru" ? "Текст или ссылка" : "Text or link"}
           maxLength={8_000}
           rows={4}
           placeholder={language === "ru" ? "Или вставьте текст или ссылку" : "Or paste text or a link"}
@@ -3131,31 +3144,39 @@ function ShareComposer({ language }: { language: Language }) {
         />
       )}
 
-      {transferProgress && <TransferProgressPanel progress={transferProgress} language={language} />}
 
       <div className="share-composer-targets quick-share-targets">
         {compatible.map((target) => (
-          <button type="button" key={target.id} disabled={!hasPayload || busy !== null} onClick={() => void send(target)}>
+          <button type="button" key={target.id} disabled={!hasPayload || busy !== null || sending} onClick={() => void send(target)}>
             <span className={target.online ? "online" : undefined}><Icon name="devices" size={17} /></span>
             <span><b>{target.name}</b><small>{target.ownerName} · {target.platform}</small></span>
-            <em>{busy === target.id && transferProgress ? <TransferProgressRing progress={transferProgress} compact /> : busy === target.id ? "…" : "→"}</em>
+            <em>{busy === target.id ? "…" : "→"}</em>
           </button>
         ))}
-        {compatible.length === 0 && <p>{language === "ru" ? "Нет устройств с подходящими разрешениями." : "No devices have the required sharing permission."}</p>}
+        {needsApproval.map((device) => (
+          <button className="requires-approval" type="button" key={device.id} onClick={() => void invoke("open_connection_settings")}>
+            <span><Icon name={accountDeviceIcon(device.platform)} size={17} /></span>
+            <span><b>{device.name}</b><small>{language === "ru" ? "Нужно повторно одобрить Quick Share" : "Pair again to approve Quick Share"}</small></span>
+            <em>!</em>
+          </button>
+        ))}
+        {compatible.length === 0 && needsApproval.length === 0 && <p>{language === "ru" ? "Нет устройств с подходящими разрешениями." : "No devices have the required sharing permission."}</p>}
       </div>
-      {sent && <p className="quick-share-success">{language === "ru" ? "Отправлено — получатель увидит системное уведомление." : "Sent — the recipient will see a system notification."}</p>}
+      {sent && <p className="quick-share-success">{language === "ru" ? "Отправлено" : "Sent"}</p>}
       {error && <p className="setting-error" role="alert">{error}</p>}
     </article>
   );
 }
 
 function QuickShareWindow() {
-  const [sendingFiles, setSendingFiles] = useState(false);
-  const [cancelRequested, setCancelRequested] = useState(false);
+  const persistentWindow = navigator.userAgent.includes("Windows");
+  const shared = useSharedTransfers();
+  const sharedActive = shared.transfers.find(item => item.status === "sending");
+  const sharedBusyRef = useRef(false);
+  useLayoutEffect(() => { sharedBusyRef.current = !!sharedActive; }, [sharedActive]);
+  const sendingFiles = !!sharedActive;
+  const transferProgress = sharedActive?.progress ?? null;
   const [cancelledSend, setCancelledSend] = useState(false);
-  const sendOperationRef = useRef<string | null>(null);
-  const cancelSendRef = useRef(false);
-  const trayProgressAtRef = useRef(0);
   const [incoming, setIncoming] = useState<ShareOfferSummary[]>([]);
   const [incomingBatches, setIncomingBatches] = useState<ShareBatch[]>([]);
   const [incomingProgress, setIncomingProgress] = useState<FileTransferProgress | null>(null);
@@ -3166,7 +3187,9 @@ function QuickShareWindow() {
     return saved === "en" || saved === "ru" ? saved : navigator.language.toLowerCase().startsWith("ru") ? "ru" : "en";
   });
   const [targets, setTargets] = useState<ShareTarget[]>([]);
+  const [knownDevices, setKnownDevices] = useState<AccountDevice[]>([]);
   const [targetsLoading, setTargetsLoading] = useState(true);
+  const [targetsError, setTargetsError] = useState<string | null>(null);
   const [payload, setPayload] = useState<QuickSharePayload | null>(null);
   const [text, setText] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -3174,12 +3197,13 @@ function QuickShareWindow() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
-  const [transferProgress, setTransferProgress] = useState<ActiveTransferProgress | null>(null);
   const [visible, setVisible] = useState(false);
   const visibleRef = useRef(false);
   const expandedRef = useRef(false);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pointerInsideRef = useRef(false);
+  const targetsRequestRef = useRef(false);
+  const nativeInboxRef = useRef(new DeferredInbox<PendingNativeShare>());
   useLayoutEffect(() => { visibleRef.current = visible; expandedRef.current = expanded; }, [visible, expanded]);
   const busyRef = useRef<string | null>(null);
   const payloadRef = useRef<QuickSharePayload | null>(null);
@@ -3200,7 +3224,6 @@ function QuickShareWindow() {
       setText("");
       setExpanded(false);
       setSent(false);
-      setTransferProgress(null);
       setError(null);
     }, (open) => {
       void invoke("set_quick_share_open", { open }).catch(reason => setError(errorMessage(reason)));
@@ -3213,20 +3236,37 @@ function QuickShareWindow() {
   useLayoutEffect(() => { hasIncomingFilesRef.current = hasIncomingFiles; }, [hasIncomingFiles]);
   useEffect(() => {
     if (hasIncomingFiles) hadIncomingRef.current = true;
+    if (persistentWindow) return;
     if (shouldDismissIncomingShelf(hadIncomingRef.current, hasIncomingFiles, busy !== null, payload !== null || sent, error !== null)) {
       hadIncomingRef.current = false;
       motion.current?.close(false);
     }
-  }, [hasIncomingFiles, busy, payload, sent, error]);
+  }, [hasIncomingFiles, busy, payload, sent, error, persistentWindow]);
 
   const loadTargets = useCallback(() => {
-    setError(null);
+    if (targetsRequestRef.current) return;
+    targetsRequestRef.current = true;
     setTargetsLoading(true);
-    void invoke<ShareTarget[]>("list_share_targets")
-      .then(setTargets)
-      .catch((reason) => setError(errorMessage(reason)))
-      .finally(() => setTargetsLoading(false));
+    void Promise.allSettled([
+      invoke<ShareTarget[]>("list_share_targets"),
+      invoke<AccountDevice[]>("list_account_devices"),
+    ]).then(([targetResult, deviceResult]) => {
+      if (targetResult.status === "fulfilled") {
+        setTargets(targetResult.value);
+        setTargetsError(null);
+      } else setTargetsError(errorMessage(targetResult.reason));
+      if (deviceResult.status === "fulfilled") setKnownDevices(deviceResult.value);
+    }).finally(() => { targetsRequestRef.current = false; setTargetsLoading(false); });
   }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+    loadTargets();
+    const timer = window.setInterval(() => {
+      if (!busyRef.current && document.visibilityState === "visible") loadTargets();
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [visible, loadTargets]);
 
   useEffect(() => {
     const stops: (() => void)[] = [];
@@ -3281,17 +3321,22 @@ function QuickShareWindow() {
     motion.current?.open();
     setText(value);
     setSent(false);
-    setTransferProgress(null);
     setError(null);
     const trimmed = value.trim();
-    if (!trimmed) return setPayload(null);
+    if (!trimmed) {
+      payloadRef.current = null;
+      return setPayload(null);
+    }
     setExpanded(true);
-    setPayload({ kind: /^https?:\/\/\S+$/i.test(trimmed) ? "url" : "text", value: trimmed, label: trimmed });
+    const nextPayload: QuickSharePayload = { kind: /^https?:\/\/\S+$/i.test(trimmed) ? "url" : "text", value: trimmed, label: trimmed };
+    payloadRef.current = nextPayload;
+    setPayload(nextPayload);
   }, []);
 
   const stageFiles = useCallback((paths: string[]) => {
-    if (busyRef.current) return;
-    const unique = [...new Set(paths)];
+    if (busyRef.current || paths.length === 0) return;
+    const previous = payloadRef.current;
+    const unique = [...new Set([...(previous?.kind === "files" ? previous.paths : []), ...paths])];
     if (unique.length === 0) return;
     motion.current?.open();
     if (unique.length > 20) {
@@ -3300,19 +3345,40 @@ function QuickShareWindow() {
       return;
     }
     const firstName = unique[0].split(/[\\/]/).pop() || unique[0];
-    setPayload({
+    const nextPayload: QuickSharePayload = {
       kind: "files",
       paths: unique,
       label: unique.length === 1 ? firstName : `${firstName} +${unique.length - 1}`,
-    });
+    };
+    payloadRef.current = nextPayload;
+    setPayload(nextPayload);
     void invoke("focus_quick_share").catch(reason => setError(errorMessage(reason)));
     setText("");
     setExpanded(true);
     setSent(false);
-    setTransferProgress(null);
     setError(null);
     loadTargets();
   }, [loadTargets, language]);
+
+  const consumeNativeShare = useCallback(() => {
+    void nativeInboxRef.current.drain(
+      () => invoke<PendingNativeShare | null>("take_pending_share"),
+      () => !busyRef.current && !sharedBusyRef.current,
+      (pending) => {
+      if (pending.files.length > 0) stageFiles(pending.files);
+      else if (pending.text) stageText(pending.text);
+      if (pending.error) {
+        motion.current?.open();
+        setExpanded(true);
+        setError(pending.error);
+      }
+      },
+    ).catch(reason => setError(errorMessage(reason)));
+  }, [stageFiles, stageText]);
+
+  useEffect(() => {
+    if (!busy && !sharedActive) consumeNativeShare();
+  }, [busy, sharedActive, consumeNativeShare]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3324,19 +3390,11 @@ function QuickShareWindow() {
     let stopDrop: (() => void) | undefined;
     let stopClose: (() => void) | undefined;
     let stopBlur: (() => void) | undefined;
-    const consumeNativeShare = () => {
-      void invoke<PendingNativeShare | null>("take_pending_share").then((pending) => {
-        if (cancelled || !pending) return;
-        if (pending.files.length > 0) stageFiles(pending.files);
-        else if (pending.text) stageText(pending.text);
-      });
-    };
     void listen<boolean>("quick-share-opened", ({ payload: shouldExpand }) => {
       if (!cancelled) {
-        const nextExpanded = shouldExpand || incomingHintExpanded(visibleRef.current, expandedRef.current, payloadRef.current !== null || busyRef.current !== null);
+        const nextExpanded = persistentWindow || shouldExpand || incomingHintExpanded(visibleRef.current, expandedRef.current, payloadRef.current !== null || busyRef.current !== null);
         motion.current?.open();
         setExpanded(nextExpanded);
-        if (!busyRef.current) setSent(false);
         loadTargets();
       }
     }).then((unlisten) => {
@@ -3344,17 +3402,21 @@ function QuickShareWindow() {
         stopOpen = unlisten;
         // Recover a show that happened before this hidden WebView was ready.
         void getCurrentWindow().isVisible().then((shown) => {
-          if (!cancelled && shown) motion.current?.open();
+          if (!cancelled && shown) {
+            motion.current?.open();
+            if (persistentWindow) setExpanded(true);
+          }
         }).catch(reason => { if (!cancelled) setError(errorMessage(reason)); });
       }
     });
     void listen<boolean>("quick-share-close-requested", ({ payload: explicit }) => {
-      if (!cancelled && !busyRef.current && (explicit || (!payloadRef.current && !sentRef.current && !errorRef.current))) motion.current?.close(explicit);
+      if (!cancelled && explicit) motion.current?.close(!busyRef.current);
+      else if (!cancelled && !persistentWindow && !busyRef.current && !payloadRef.current && !sentRef.current && !errorRef.current) motion.current?.close(false);
     }).then((unlisten) => {
       if (cancelled) unlisten(); else stopClose = unlisten;
     });
     void listen("quick-share-blurred", () => {
-      if (!cancelled) {
+      if (!cancelled && !persistentWindow) {
         clearTimeout(hoverTimer.current);
         motion.current?.close(false);
       }
@@ -3383,8 +3445,8 @@ function QuickShareWindow() {
       if (!cancelled) {
         setDragging(active);
         if (active) motion.current?.open();
-        else motion.current?.endDrag(() => !payloadRef.current && !busyRef.current && !sentRef.current && !hasIncomingFilesRef.current);
-        if (active && !payloadRef.current && !busyRef.current) setExpanded(false);
+        else if (!persistentWindow) motion.current?.endDrag(() => !payloadRef.current && !busyRef.current && !sentRef.current && !hasIncomingFilesRef.current);
+        if (active && !persistentWindow && !payloadRef.current && !busyRef.current) setExpanded(false);
       }
     }).then((unlisten) => {
       if (cancelled) unlisten(); else stopDragState = unlisten;
@@ -3416,7 +3478,7 @@ function QuickShareWindow() {
       motion.current?.dispose();
       clearTimeout(hoverTimer.current);
     };
-  }, [loadTargets, stageFiles, stageText]);
+  }, [loadTargets, stageFiles, stageText, consumeNativeShare, persistentWindow]);
 
   useEffect(() => {
     if (!visible) return;
@@ -3445,98 +3507,42 @@ function QuickShareWindow() {
   }, [busy, dismissShelf]);
 
   async function send(target: ShareTarget) {
-    if (!payload || busy) return;
-    const operationId = payload.kind === "files" ? newTransferId() : null;
-    let operationStarted = false;
-    setSendingFiles(operationId !== null);
-    sendOperationRef.current = operationId;
-    cancelSendRef.current = false;
-    setCancelRequested(false);
+    if (!payload || busyRef.current || sharedBusyRef.current) return;
     setCancelledSend(false);
     motion.current?.open();
     busyRef.current = target.id;
     setBusy(target.id);
     setError(null);
     setSent(false);
-    setTransferProgress(null);
     try {
-      if (payload.kind === "files") {
-        await invoke("begin_share_send", { operationId });
-        operationStarted = true;
-        if (cancelSendRef.current) throw new Error("The transfer was cancelled.");
-        setExpanded(false);
-        if (payload.paths.length > 1 && target.supportsFileBatch) {
-          const stopProgress = await listen<FileBatchProgress>("link-file-batch-progress", ({ payload: progress }) => {
-            setTransferProgress({ transferId: progress.batchId, fileName: progress.fileName,
-              transferredBytes: progress.transferredBytes, totalBytes: progress.totalBytes,
-              fileIndex: progress.fileIndex - 1, fileCount: progress.fileCount, targetName: target.name });
-          });
-          try {
-            await invoke("send_share_batch", { targetDeviceId: target.id, filePaths: payload.paths, operationId });
-          } finally { stopProgress(); }
-        } else for (const [fileIndex, filePath] of payload.paths.entries()) {
-          if (cancelSendRef.current) throw new Error("The transfer was cancelled.");
-          const transferId = newTransferId();
-          const fileName = filePath.split(/[\\/]/).pop() || filePath;
-          setTransferProgress({ transferId, fileName, transferredBytes: 0, totalBytes: 0, fileIndex, fileCount: payload.paths.length, targetName: target.name });
-          const stopProgress = await listen<FileTransferProgress>("link-file-transfer-progress", ({ payload: progress }) => {
-            if (progress.transferId !== transferId) return;
-            setTransferProgress({ ...progress, fileIndex, fileCount: payload.paths.length, targetName: target.name });
-          });
-          try {
-            await invoke("send_share_file", { targetDeviceId: target.id, filePath, transferId, operationId });
-          } finally {
-            stopProgress();
-          }
-        }
-      } else {
-        await invoke("send_share_text", { targetDeviceId: target.id, kind: payload.kind, value: payload.value });
-      }
+      await sendShared(payload, target);
+      payloadRef.current = null;
       setPayload(null);
       setText("");
-      setTransferProgress(null);
       setSent(true);
-      motion.current?.afterSuccess(dismissShelf);
+      if (!persistentWindow) motion.current?.afterSuccess(dismissShelf);
     } catch (reason) {
-      if (cancelSendRef.current) setCancelledSend(true);
+      if (errorMessage(reason) === "The transfer was cancelled.") setCancelledSend(true);
       else setError(errorMessage(reason));
       setExpanded(true);
-      setTransferProgress(null);
     } finally {
-      if (operationId && operationStarted) await invoke("finish_share_send", { operationId }).catch(() => {});
-      sendOperationRef.current = null;
-      setSendingFiles(false);
-      setCancelRequested(false);
       busyRef.current = null;
       setBusy(null);
     }
   }
 
-  async function cancelSend() {
-    const operationId = sendOperationRef.current;
-    if (!operationId || cancelRequested) return;
-    cancelSendRef.current = true;
-    setCancelRequested(true);
-    try { await invoke("cancel_share_send", { operationId }); }
-    catch (reason) { setError(errorMessage(reason)); setCancelRequested(false); }
-  }
-
-  useEffect(() => {
-    const percent = sendingFiles ? sendProgressPercent(transferProgress) : null;
-    const now = Date.now();
-    if (percent !== null && percent < 100 && now - trayProgressAtRef.current < 250) return;
-    trayProgressAtRef.current = now;
-    void invoke("set_share_send_progress", { percent }).catch(() => {});
-  }, [sendingFiles, transferProgress]);
-
   const compatible = targets.filter((target) => !payload
     || (payload.kind === "files" && target.supportsFile)
     || (payload.kind === "url" && target.supportsUrl)
-    || (payload.kind === "text" && target.supportsText));
+    || (payload.kind === "text" && target.supportsText)).sort((a, b) => Number(b.online) - Number(a.online));
+  const needsApproval = unavailableShareDevices(targets, knownDevices);
+  function chooseQuickShareFiles() {
+    void invoke<string[]>("pick_share_files").then(stageFiles).catch(reason => setError(errorMessage(reason)));
+  }
 
   return (
     <main
-      className={`tray-share-root${visible ? " visible" : " closing"}${expanded ? " expanded" : ""}${dragging ? " dragging" : ""}${busy ? " sending" : ""}${sent ? " sent" : ""}`}
+      className={`tray-share-root${persistentWindow ? " persistent" : ""}${visible ? " visible" : " closing"}${expanded ? " expanded" : ""}${dragging ? " dragging" : ""}${busy ? " sending" : ""}${sent ? " sent" : ""}`}
       aria-busy={busy !== null}
       onFocusCapture={() => motion.current?.interact()}
       onMouseEnter={() => {
@@ -3549,9 +3555,11 @@ function QuickShareWindow() {
       onMouseLeave={() => {
         pointerInsideRef.current = false;
         clearTimeout(hoverTimer.current);
-        void getCurrentWindow().isFocused().then((focused) => {
-          if (!pointerInsideRef.current && (busyRef.current || (!focused && !payloadRef.current && !sentRef.current))) setExpanded(false);
-        });
+        if (!persistentWindow) {
+          void getCurrentWindow().isFocused().then((focused) => {
+            if (!pointerInsideRef.current && (busyRef.current || (!focused && !payloadRef.current && !sentRef.current))) setExpanded(false);
+          });
+        }
         void invoke("set_quick_share_pointer_inside", { inside: false });
       }}
     >
@@ -3584,10 +3592,17 @@ function QuickShareWindow() {
         )}
         {expanded && <div className="tray-share-titlebar">
           <span><Icon name="transfer" size={17} /></span>
-          <div><b>{hasIncomingFiles && !payload ? (language === "ru" ? "Приём файлов" : "Receive files") : (language === "ru" ? "Быстрая отправка" : "Quick share")}</b><small>HomePlace Link</small></div>
+          <div><b>{hasIncomingFiles && !payload ? (language === "ru" ? "Входящие файлы" : "Incoming files") : "Quick Share"}</b>{!persistentWindow && <small>HomePlace Link</small>}</div>
           <button type="button" aria-label={language === "ru" ? "Скрыть быструю отправку" : "Hide quick share"} onClick={dismissShelf}>×</button>
         </div>}
         {expanded && <div className="quick-share-panel">
+          <SharedTransfers language={language} history />
+          <div className="quick-share-tools">
+            {(!persistentWindow || payload !== null) && <button type="button" disabled={busy !== null || !!sharedActive} onClick={chooseQuickShareFiles}><Icon name="plus" size={16} />{language === "ru" ? "Выбрать файлы…" : "Choose files…"}</button>}
+            <button type="button" disabled={targetsLoading || busy !== null} onClick={loadTargets}>
+              <Icon name="refresh" size={16} />{language === "ru" ? "Обновить устройства" : "Refresh devices"}
+            </button>
+          </div>
           {(incoming.some(offer => offer.kind === "file") || incomingBatches.some(batch => batch.status === "offered" || batch.status === "accepted")) && <section className="quick-share-incoming" aria-label={language === "ru" ? "Входящие файлы" : "Incoming files"}>
             <h3>{language === "ru" ? "Входящие файлы" : "Incoming files"}</h3>
             {groupIncomingFiles(incoming).map(group => <article key={group.sourceName}>
@@ -3608,35 +3623,38 @@ function QuickShareWindow() {
             </div>}
           </section>}
           {(!hasIncomingFiles || payload !== null || dragging) && <>
-          <div className="quick-share-copy">
+          {persistentWindow && !payload && <button type="button" className="quick-share-dropzone" aria-label={language === "ru" ? "Выбрать файлы…" : "Choose files…"} disabled={busy !== null || !!sharedActive} onClick={chooseQuickShareFiles}>
+            <span><Icon name="plus" size={24} /></span>
+            <b>{language === "ru" ? "Добавить файлы" : "Add files"}</b>
+            <small>{language === "ru" ? "или перетащить сюда" : "or drop them here"}</small>
+          </button>}
+          {(!persistentWindow || !!payload) && <div className="quick-share-copy">
             <b>{dragging
               ? (language === "ru" ? "Отпустите — файл останется на полке" : "Drop it — the file will stay on the shelf")
               : payload ? (language === "ru" ? "Куда отправить?" : "Where should it go?")
               : (language === "ru" ? "Перетащите файлы сюда" : "Drop files here")}</b>
-            <small>{dragging
+            {!persistentWindow && <small>{dragging
               ? (language === "ru" ? "После этого спокойно выберите устройство для отправки." : "Then choose a device whenever you are ready.")
               : payload ? (language === "ru" ? "Нажмите на устройство ниже, чтобы отправить." : "Choose a device below to send.")
-              : (language === "ru" ? "Или вставьте текст или ссылку, затем выберите устройство." : "Or paste text or a link, then choose a device.")}</small>
-          </div>
+              : (language === "ru" ? "Или вставьте текст или ссылку, затем выберите устройство." : "Or paste text or a link, then choose a device.")}</small>}
+          </div>}
           {payload?.kind === "files" ? (
             <div className="quick-share-payload">
               <Icon name="transfer" size={17} />
               <span><b>{payload.label}</b><small>{language === "ru" ? `${payload.paths.length} файл(ов), до ${fileLimitLabel(fileLimit, language)} каждый` : `${payload.paths.length} file(s), up to ${fileLimitLabel(fileLimit, language)} each`}</small></span>
-              <button type="button" disabled={busy !== null} aria-label={language === "ru" ? "Убрать файлы с полки" : "Remove files from shelf"} onClick={() => { setPayload(null); setText(""); setError(null); setTransferProgress(null); motion.current?.open(); }}>×</button>
+              <button type="button" disabled={busy !== null || !!sharedActive} aria-label={language === "ru" ? "Убрать файлы с полки" : "Remove files from shelf"} onClick={() => { payloadRef.current = null; setPayload(null); setText(""); setError(null); motion.current?.open(); }}>×</button>
             </div>
           ) : (
             <textarea
               value={text}
-              disabled={busy !== null}
+              disabled={busy !== null || !!sharedActive}
               aria-label={language === "ru" ? "Текст или ссылка для отправки" : "Text or link to send"}
               maxLength={8000}
-              rows={3}
-              placeholder={language === "ru" ? "Вставьте текст или ссылку" : "Paste text or a link"}
+              rows={2}
+              placeholder={language === "ru" ? "Текст или ссылка…" : "Text or link…"}
               onChange={(event) => stageText(event.target.value)}
             />
           )}
-          {transferProgress && <TransferProgressPanel progress={transferProgress} language={language} />}
-          {sendingFiles && <button className="quick-share-cancel" type="button" disabled={cancelRequested} onClick={() => void cancelSend()}>{cancelRequested ? (language === "ru" ? "Останавливаем…" : "Stopping…") : (language === "ru" ? "Отменить отправку" : "Cancel send")}</button>}
           <button type="button" className="quick-share-exchange" disabled={!payload || busy !== null || (payload.kind === "files" && payload.paths.length !== 1)} onClick={() => {
             if (!payload) return;
             void invoke("open_exchange_window", {
@@ -3648,20 +3666,29 @@ function QuickShareWindow() {
             {language === "ru" ? "Создать временную ссылку" : "Create temporary link"}
           </button>
           {payload?.kind === "files" && payload.paths.length > 1 && <p className="temporary-exchange-note">{language === "ru" ? "Для временной ссылки выберите один файл." : "Choose one file for a temporary link."}</p>}
+          {persistentWindow && <h2 className="quick-share-devices-heading">{language === "ru" ? "Устройства" : "Devices"}<span>{compatible.length + needsApproval.length}</span></h2>}
           <div className="quick-share-targets">
             {compatible.map((target) => (
-              <button type="button" key={target.id} aria-label={language === "ru" ? `Отправить на ${target.name}` : `Send to ${target.name}`} disabled={!payload || busy !== null} onClick={() => void send(target)}>
+              <button type="button" key={target.id} aria-label={language === "ru" ? `Отправить на ${target.name}` : `Send to ${target.name}`} disabled={!payload || busy !== null || !!sharedActive} onClick={() => void send(target)}>
                 <span className={target.online ? "online" : undefined}><Icon name={accountDeviceIcon(target.platform)} size={20} /></span>
-                <span><b>{target.name}</b><small>{target.ownerName} · {target.platform}{!target.online ? (language === "ru" ? " · Не в сети" : " · Offline") : ""}{payload?.kind === "files" && payload.paths.length > 1 && !target.supportsFileBatch ? (language === "ru" ? " · По одному" : " · Separately") : ""}</small></span>
+                <span><b>{target.name}</b><small><i className={`quick-share-presence${target.online ? " online" : ""}`} />{target.online ? (language === "ru" ? "В сети" : "Online") : (language === "ru" ? "Не в сети" : "Offline")} · {target.platform}</small></span>
                 <em>{busy === target.id && transferProgress ? <TransferProgressRing progress={transferProgress} compact /> : busy === target.id ? "…" : "→"}</em>
               </button>
             ))}
+            {needsApproval.map((device) => (
+              <button className="requires-approval" type="button" key={device.id} onClick={() => void invoke("open_connection_settings")}>
+                <span><Icon name={accountDeviceIcon(device.platform)} size={20} /></span>
+                <span><b>{device.name}</b><small>{language === "ru" ? "Повторно одобрите Quick Share на этом устройстве" : "Pair this device again to approve Quick Share"}</small></span>
+                <em>!</em>
+              </button>
+            ))}
             {compatible.length === 0 && targetsLoading && <p role="status">{language === "ru" ? "Загружаем устройства…" : "Loading devices…"}</p>}
-            {compatible.length === 0 && !targetsLoading && !error && <p>{language === "ru" ? "Нет устройств с подходящими разрешениями. Проверьте быструю отправку в HomePlace." : "No devices have the required permission. Check quick sharing in HomePlace."}</p>}
+            {compatible.length === 0 && needsApproval.length === 0 && !targetsLoading && !error && !targetsError && <p>{language === "ru" ? "Нет устройств с подходящими разрешениями. Проверьте быструю отправку в HomePlace." : "No devices have the required permission. Check quick sharing in HomePlace."}</p>}
           </div>
           </>}
-          {sent && <p className="quick-share-success" role="status">{language === "ru" ? "Отправлено — получателю предложено принять." : "Sent — the recipient can accept it."}</p>}
+          {sent && <p className="quick-share-success" role="status">{language === "ru" ? "Отправлено" : "Sent"}</p>}
           {cancelledSend && <p role="status">{language === "ru" ? "Отправка остановлена. Уже доставленные файлы остаются у получателя." : "Send stopped. Files already delivered remain with the recipient."}</p>}
+          {targetsError && <p className="setting-error" role="alert">{targetsError}</p>}
           {error && <div className="setting-error" role="alert"><p>{error}</p><button type="button" disabled={targetsLoading || busy !== null} onClick={loadTargets}>{language === "ru" ? "Обновить устройства" : "Refresh devices"}</button></div>}
         </div>}
       </section>

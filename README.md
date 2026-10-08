@@ -14,8 +14,9 @@ can safely provide.
 
 - **macOS:** glass materials, native window vibrancy, a compact menu bar
   experience, Keychain and familiar macOS interaction patterns.
-- **Windows:** Fluent styling, Mica or Acrylic where supported, a notification
-  area presence and Windows Credential Manager.
+- **Windows:** Fluent styling, Mica where supported, native taskbar transfer
+  progress, custom Snap Layouts, a persistent Quick Share window, Explorer
+  sharing, a notification-area presence and Windows Credential Manager.
 - **Linux:** desktop-neutral controls, system tray support where available,
   Secret Service integration and compositor-aware transparency with a solid
   fallback.
@@ -87,7 +88,8 @@ device credential securely and reporting presence from the system tray.
 
 See [Development plan](docs/DEVELOPMENT_PLAN.md),
 [Architecture](docs/ARCHITECTURE.md) and
-[Platform design](docs/PLATFORM_DESIGN.md).
+[Platform design](docs/PLATFORM_DESIGN.md). Local checks and Windows installer
+packaging are documented in [Build and packaging](docs/BUILD.md).
 
 ## Related projects
 

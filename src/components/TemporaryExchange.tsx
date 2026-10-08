@@ -165,9 +165,8 @@ export function TemporaryExchange({ language, gateway, expiryOptions, initialCon
       if (dropped) { setText(dropped); setContent(null); setError(null); }
     }}>
       <div className="section-heading">
-        <div><p className="eyebrow">HomePlace Link</p><h3>{ru ? "Временный обмен" : "Temporary exchange"}</h3></div>
+        <div><h3>{ru ? "Временный обмен" : "Temporary exchange"}</h3></div>
       </div>
-      <p className="temporary-exchange-intro">{ru ? "Передайте код или ссылку вместо выбора устройства. Доступ истечёт сам — или удалите его раньше." : "Share a code or link without choosing a device. Access expires automatically, or you can remove it sooner."}</p>
       <p className="temporary-exchange-note">{ru ? "Ссылка использует текущий адрес сервера. Локальный IP работает только там, где этот адрес доступен." : "The link uses your current server address. A local IP works only where that address is reachable."}</p>
 
       <div className="temporary-exchange-columns">

@@ -1898,6 +1898,8 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+ "windows",
+ "winreg 0.55.0",
  "zeroize",
 ]
 

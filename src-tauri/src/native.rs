@@ -1,4 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
 
 use serde::Serialize;
@@ -14,6 +16,7 @@ static PENDING_SHARE: LazyLock<Mutex<Option<PendingShare>>> = LazyLock::new(|| M
 pub struct PendingShare {
     files: Vec<String>,
     text: Option<String>,
+    error: Option<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -99,12 +102,26 @@ pub fn take_pending_share() -> Option<PendingShare> {
     PENDING_SHARE.lock().ok()?.take()
 }
 
-pub fn dispatch_share_arguments<R: Runtime>(app: &AppHandle<R>, arguments: &[String]) -> bool {
+fn pending_share_from_arguments(arguments: &[String]) -> Option<PendingShare> {
     let mut files = Vec::new();
     let mut text = None;
+    let mut explorer_invocation = false;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
+            "--homeplace-share" => {
+                explorer_invocation = true;
+                for value in arguments.iter().skip(index + 1) {
+                    if files.len() >= MAX_SHARED_FILES {
+                        break;
+                    }
+                    let path = Path::new(value);
+                    if is_safe_shared_file(path) {
+                        files.push(path.to_string_lossy().into_owned());
+                    }
+                }
+                break;
+            }
             "--homeplace-share-file" if files.len() < MAX_SHARED_FILES => {
                 if let Some(value) = arguments.get(index + 1) {
                     let path = Path::new(value);
@@ -133,12 +150,43 @@ pub fn dispatch_share_arguments<R: Runtime>(app: &AppHandle<R>, arguments: &[Str
         index += 1;
     }
 
-    if files.is_empty() && text.is_none() {
-        return false;
+    if files.is_empty() && text.is_none() && !explorer_invocation {
+        return None;
     }
-    let pending = PendingShare { files, text };
-    if let Ok(mut stored) = PENDING_SHARE.lock() {
+    let error = (explorer_invocation && files.is_empty()).then(|| {
+        "Windows did not provide a readable file. Try Share with HomePlace again.".to_string()
+    });
+    Some(PendingShare { files, text, error })
+}
+
+fn stage_pending_share(stored: &mut Option<PendingShare>, pending: PendingShare) {
+    if let Some(existing) = stored.as_mut()
+        && existing.text.is_none()
+        && pending.text.is_none()
+    {
+        for file in pending.files {
+            if !existing.files.contains(&file) {
+                if existing.files.len() == MAX_SHARED_FILES {
+                    existing.error = Some("Choose up to 20 files per transfer.".into());
+                    break;
+                }
+                existing.files.push(file);
+            }
+        }
+        if pending.error.is_some() {
+            existing.error = pending.error;
+        }
+    } else {
         *stored = Some(pending);
+    }
+}
+
+pub fn dispatch_share_arguments<R: Runtime>(app: &AppHandle<R>, arguments: &[String]) -> bool {
+    let Some(pending) = pending_share_from_arguments(arguments) else {
+        return false;
+    };
+    if let Ok(mut stored) = PENDING_SHARE.lock() {
+        stage_pending_share(&mut stored, pending);
     } else {
         return false;
     }
@@ -165,5 +213,75 @@ mod tests {
         assert!(!is_safe_shared_file(Path::new(
             "/missing/homeplace-share.txt"
         )));
+    }
+
+    #[test]
+    fn explorer_share_marker_collects_multiple_existing_files() {
+        let first =
+            std::env::temp_dir().join(format!("homeplace-share-{}-1.txt", std::process::id()));
+        let second =
+            std::env::temp_dir().join(format!("homeplace-share-{}-2.txt", std::process::id()));
+        std::fs::write(&first, b"one").unwrap();
+        std::fs::write(&second, b"two").unwrap();
+        let arguments = vec![
+            "homeplace-desktop.exe".to_string(),
+            "--homeplace-share".to_string(),
+            first.to_string_lossy().into_owned(),
+            second.to_string_lossy().into_owned(),
+        ];
+
+        let pending = pending_share_from_arguments(&arguments).unwrap();
+        assert_eq!(
+            pending.files,
+            vec![
+                first.to_string_lossy().into_owned(),
+                second.to_string_lossy().into_owned()
+            ]
+        );
+        assert!(pending.text.is_none());
+        assert!(pending.error.is_none());
+
+        let _ = std::fs::remove_file(first);
+        let _ = std::fs::remove_file(second);
+    }
+
+    #[test]
+    fn explorer_share_marker_reports_missing_shell_input() {
+        let pending = pending_share_from_arguments(&[
+            "homeplace-desktop.exe".to_string(),
+            "--homeplace-share".to_string(),
+            "%1".to_string(),
+        ])
+        .unwrap();
+        assert!(pending.files.is_empty());
+        assert!(pending.error.is_some());
+    }
+
+    #[test]
+    fn separate_shell_invocations_preserve_files_and_report_overflow() {
+        let mut stored = None;
+        for index in 0..=MAX_SHARED_FILES {
+            stage_pending_share(
+                &mut stored,
+                PendingShare {
+                    files: vec![format!("file-{index}.txt")],
+                    text: None,
+                    error: None,
+                },
+            );
+        }
+        let pending = stored.as_ref().unwrap();
+        assert_eq!(pending.files.len(), MAX_SHARED_FILES);
+        assert_eq!(pending.files[0], "file-0.txt");
+        assert!(pending.error.is_some());
+        stage_pending_share(
+            &mut stored,
+            PendingShare {
+                files: vec!["file-0.txt".into()],
+                text: None,
+                error: None,
+            },
+        );
+        assert_eq!(stored.unwrap().files.len(), MAX_SHARED_FILES);
     }
 }

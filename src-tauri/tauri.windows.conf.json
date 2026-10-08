@@ -1,0 +1,48 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "build": {
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "HomePlace Desktop",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 720,
+        "minHeight": 560,
+        "center": true,
+        "resizable": true,
+        "maximizable": true,
+        "minimizable": true,
+        "closable": true,
+        "decorations": false,
+        "shadow": true,
+        "fullscreen": false,
+        "transparent": false
+      },
+      {
+        "label": "quick-share",
+        "title": "HomePlace Quick Share",
+        "width": 460,
+        "height": 620,
+        "minWidth": 400,
+        "minHeight": 480,
+        "visible": false,
+        "resizable": true,
+        "maximizable": false,
+        "minimizable": true,
+        "closable": true,
+        "decorations": true,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "visibleOnAllWorkspaces": false,
+        "backgroundThrottling": "disabled",
+        "transparent": false,
+        "shadow": true,
+        "backgroundColor": "#0f1117"
+      }
+    ]
+  }
+}

@@ -347,7 +347,7 @@ select:focus-visible {
   max-width: 1480px;
   min-height: 100vh;
   margin: 0 auto;
-  padding: 38px 0 0;
+  padding: 40px 0 0;
   background: var(--canvas-raised);
   border-right: 1px solid var(--line);
   border-left: 1px solid var(--line);
@@ -360,9 +360,9 @@ select:focus-visible {
 }
 
 .app-sidebar {
-  top: 38px;
+  top: 40px;
   width: 78px;
-  height: calc(100vh - 38px);
+  height: calc(100vh - 40px);
   border: 0;
   border-right: 1px solid var(--line);
   border-radius: 0;
@@ -373,16 +373,14 @@ select:focus-visible {
   -webkit-backdrop-filter: none;
 }
 
-.app-sidebar:hover,
-.app-sidebar:focus-within {
+.desktop-shell.sidebar-expanded .app-sidebar {
   width: 238px;
   border-color: var(--line-strong);
   background: var(--canvas);
   box-shadow: 24px 0 55px rgba(0, 0, 0, 0.14);
 }
 
-html[data-theme="light"] .app-sidebar:hover,
-html[data-theme="light"] .app-sidebar:focus-within {
+html[data-theme="light"] .desktop-shell.sidebar-expanded .app-sidebar {
   box-shadow: 24px 0 55px rgba(38, 40, 33, 0.09);
 }
 
@@ -487,7 +485,7 @@ html[data-theme="light"] .sidebar-brand .brand-mark img { filter: none; }
 
 .app-content {
   max-width: 1240px;
-  min-height: calc(100vh - 38px);
+  min-height: calc(100vh - 40px);
   padding: 28px 38px 48px;
 }
 
@@ -1332,8 +1330,8 @@ html[data-theme="light"] .offer-copy b { color: var(--text-soft); }
 }
 
 @media (max-width: 760px) {
-  .desktop-shell { grid-template-columns: 66px minmax(0, 1fr); padding-top: 38px; }
-  .app-sidebar { top: 38px; width: 66px; height: calc(100vh - 38px); }
+  .desktop-shell { grid-template-columns: 66px minmax(0, 1fr); padding-top: 40px; }
+  .app-sidebar { top: 40px; width: 66px; height: calc(100vh - 40px); }
   .app-content { padding: 22px 16px 36px; }
   .welcome-card,
   .feature-hero,

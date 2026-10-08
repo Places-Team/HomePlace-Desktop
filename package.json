@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=22 <25"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -10,7 +13,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "lint": "eslint .",
-    "tauri": "tauri"
+    "check": "npm run lint && npm test && npm run build",
+    "tauri": "tauri",
+    "tauri:build:windows": "tauri build --bundles nsis,msi"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

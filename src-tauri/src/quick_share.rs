@@ -16,39 +16,63 @@ impl VisibilityEpoch {
 static EPOCH: VisibilityEpoch = VisibilityEpoch::new();
 const EXIT_MS: u64 = 120;
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn shelf_geometry(visible: bool, expanded: bool) -> Option<tauri::LogicalSize<f64>> {
-    visible.then(|| if expanded {
-        tauri::LogicalSize::new(420.0, 500.0)
-    } else {
-        tauri::LogicalSize::new(104.0, 56.0)
+    visible.then(|| {
+        if expanded {
+            tauri::LogicalSize::new(420.0, 500.0)
+        } else {
+            tauri::LogicalSize::new(104.0, 56.0)
+        }
     })
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn should_hide_idle_drag(current: bool, retained: bool) -> bool {
     current && !retained
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn finish_drag<R: Runtime>(app: &AppHandle<R>) {
-    let generation = crate::tray::quick_share_generation();
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        // Allow the WebView drop handler to stage and pin the selection first.
-        tokio::time::sleep(std::time::Duration::from_millis(750)).await;
-        let callback_app = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            if should_hide_idle_drag(generation == crate::tray::quick_share_generation(), crate::tray::quick_share_retained()) {
-                if let Some(window) = callback_app.get_webview_window("quick-share") {
-                    let _ = window.set_ignore_cursor_events(true);
-                    let _ = window.hide();
+    #[cfg(target_os = "windows")]
+    {
+        let _ = app;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let generation = crate::tray::quick_share_generation();
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            // Allow the WebView drop handler to stage and pin the selection first.
+            tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+            let callback_app = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if should_hide_idle_drag(
+                    generation == crate::tray::quick_share_generation(),
+                    crate::tray::quick_share_retained(),
+                ) {
+                    if let Some(window) = callback_app.get_webview_window("quick-share") {
+                        let _ = window.set_ignore_cursor_events(true);
+                        let _ = window.hide();
+                    }
                 }
-            }
+            });
         });
-    });
+    }
 }
 
 pub fn configure<R: Runtime>(window: &WebviewWindow<R>) {
-    let _ = window.set_skip_taskbar(true);
-    let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window.set_skip_taskbar(true);
+        let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = window.set_skip_taskbar(false);
+        let _ = window.set_background_color(Some(tauri::window::Color(15, 17, 23, 255)));
+        let _ = window.set_shadow(true);
+    }
     #[cfg(target_os = "macos")]
     if let Ok(pointer) = window.ns_window() {
         // Called on the app's main thread. This is Tauri's existing NSWindow;
@@ -90,10 +114,18 @@ fn delayed_hide<R: Runtime>(app: AppHandle<R>, epoch: u64, delay: u64) {
 pub fn prepare_show<R: Runtime>(app: &AppHandle<R>) {
     let epoch = EPOCH.advance();
     if let Some(window) = app.get_webview_window("quick-share") {
+        #[cfg(target_os = "windows")]
+        let _ = window.set_ignore_cursor_events(false);
+        #[cfg(not(target_os = "windows"))]
         let _ = window.set_ignore_cursor_events(true);
     }
-    // Hide even if the frontend fails to acknowledge the opened event.
-    delayed_hide(app.clone(), epoch, 1000);
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Hide even if the frontend fails to acknowledge the opened event.
+        delayed_hide(app.clone(), epoch, 1000);
+    }
+    #[cfg(target_os = "windows")]
+    let _ = (app, epoch);
 }
 
 #[tauri::command]
@@ -129,8 +161,14 @@ mod tests {
     fn hidden_shelves_never_receive_resize_geometry() {
         assert!(shelf_geometry(false, false).is_none());
         assert!(shelf_geometry(false, true).is_none());
-        assert_eq!(shelf_geometry(true, false), Some(tauri::LogicalSize::new(104.0, 56.0)));
-        assert_eq!(shelf_geometry(true, true), Some(tauri::LogicalSize::new(420.0, 500.0)));
+        assert_eq!(
+            shelf_geometry(true, false),
+            Some(tauri::LogicalSize::new(104.0, 56.0))
+        );
+        assert_eq!(
+            shelf_geometry(true, true),
+            Some(tauri::LogicalSize::new(420.0, 500.0))
+        );
     }
 
     #[test]

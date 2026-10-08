@@ -27,6 +27,17 @@ pub fn current() -> PlatformInfo {
     return linux::info();
 }
 
+pub fn configure(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "windows")]
+    return windows::configure(app);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
 pub fn device_name(fallback: &str) -> String {
     hostname::get()
         .ok()

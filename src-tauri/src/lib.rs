@@ -3,6 +3,7 @@ mod native;
 mod platform;
 mod quick_share;
 mod share_send;
+mod shared_transfers;
 mod startup;
 mod tray;
 
@@ -43,51 +44,122 @@ fn start_window_drag(window: tauri::WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn snap_window(window: tauri::WebviewWindow, layout: String) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Only the main window supports snap layouts.".into());
+    }
+    if layout == "maximize" {
+        return window
+            .maximize()
+            .map_err(|_| "Could not maximize the HomePlace window.".to_string());
+    }
+    let monitor = window
+        .current_monitor()
+        .map_err(|_| "Could not locate the current display.".to_string())?
+        .ok_or_else(|| "No display is available for window snapping.".to_string())?;
+    let area = monitor.work_area();
+    let half_width = area.size.width / 2;
+    let half_height = area.size.height / 2;
+    let (x, y, width, height) = match layout.as_str() {
+        "left" => (
+            area.position.x,
+            area.position.y,
+            half_width,
+            area.size.height,
+        ),
+        "right" => (
+            area.position.x + half_width as i32,
+            area.position.y,
+            area.size.width - half_width,
+            area.size.height,
+        ),
+        "top-left" => (area.position.x, area.position.y, half_width, half_height),
+        "top-right" => (
+            area.position.x + half_width as i32,
+            area.position.y,
+            area.size.width - half_width,
+            half_height,
+        ),
+        "bottom-left" => (
+            area.position.x,
+            area.position.y + half_height as i32,
+            half_width,
+            area.size.height - half_height,
+        ),
+        "bottom-right" => (
+            area.position.x + half_width as i32,
+            area.position.y + half_height as i32,
+            area.size.width - half_width,
+            area.size.height - half_height,
+        ),
+        _ => return Err("Unknown snap layout.".into()),
+    };
+    let _ = window.unmaximize();
+    window
+        .set_size(tauri::PhysicalSize::new(width, height))
+        .map_err(|_| "Could not resize the HomePlace window.".to_string())?;
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|_| "Could not position the HomePlace window.".to_string())
+}
+
+#[tauri::command]
 fn set_quick_share_expanded(window: tauri::WebviewWindow, expanded: bool) -> Result<(), String> {
     if window.label() != "quick-share" {
         return Err("Only the quick-share window can use shelf sizing.".into());
     }
-    let scale = window
-        .scale_factor()
-        .map_err(|_| "Could not read the quick-share display scale.".to_string())?;
-    let old_position = window
-        .outer_position()
-        .map_err(|_| "Could not read the quick-share position.".to_string())?;
-    let old_size = window
-        .outer_size()
-        .map_err(|_| "Could not read the quick-share size.".to_string())?;
-    let Some(logical_size) = quick_share::shelf_geometry(window.is_visible().unwrap_or(false), expanded) else {
-        return Ok(());
-    };
-    let physical_size = logical_size.to_physical::<u32>(scale);
-    let monitor = window
-        .current_monitor()
-        .map_err(|_| "Could not locate the quick-share display.".to_string())?;
-    let grows_up = monitor.as_ref().is_some_and(|monitor| {
-        old_position.y > monitor.position().y + monitor.size().height as i32 / 2
-    });
-    let mut x = old_position.x + (old_size.width as i32 - physical_size.width as i32) / 2;
-    let mut y = if grows_up {
-        old_position.y + old_size.height as i32 - physical_size.height as i32
-    } else {
-        old_position.y
-    };
-    if let Some(monitor) = monitor {
-        let min_x = monitor.position().x + 8;
-        let min_y = monitor.position().y + 8;
-        let max_x =
-            monitor.position().x + monitor.size().width as i32 - physical_size.width as i32 - 8;
-        let max_y =
-            monitor.position().y + monitor.size().height as i32 - physical_size.height as i32 - 8;
-        x = x.clamp(min_x, max_x.max(min_x));
-        y = y.clamp(min_y, max_y.max(min_y));
+    #[cfg(target_os = "windows")]
+    {
+        let _ = expanded;
+        Ok(())
     }
-    window
-        .set_size(logical_size)
-        .map_err(|_| "Could not resize the quick-share shelf.".to_string())?;
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|_| "Could not reposition the quick-share shelf.".to_string())
+    #[cfg(not(target_os = "windows"))]
+    {
+        let scale = window
+            .scale_factor()
+            .map_err(|_| "Could not read the quick-share display scale.".to_string())?;
+        let old_position = window
+            .outer_position()
+            .map_err(|_| "Could not read the quick-share position.".to_string())?;
+        let old_size = window
+            .outer_size()
+            .map_err(|_| "Could not read the quick-share size.".to_string())?;
+        let Some(logical_size) =
+            quick_share::shelf_geometry(window.is_visible().unwrap_or(false), expanded)
+        else {
+            return Ok(());
+        };
+        let physical_size = logical_size.to_physical::<u32>(scale);
+        let monitor = window
+            .current_monitor()
+            .map_err(|_| "Could not locate the quick-share display.".to_string())?;
+        let grows_up = monitor.as_ref().is_some_and(|monitor| {
+            old_position.y > monitor.position().y + monitor.size().height as i32 / 2
+        });
+        let mut x = old_position.x + (old_size.width as i32 - physical_size.width as i32) / 2;
+        let mut y = if grows_up {
+            old_position.y + old_size.height as i32 - physical_size.height as i32
+        } else {
+            old_position.y
+        };
+        if let Some(monitor) = monitor {
+            let min_x = monitor.position().x + 8;
+            let min_y = monitor.position().y + 8;
+            let max_x =
+                monitor.position().x + monitor.size().width as i32 - physical_size.width as i32 - 8;
+            let max_y = monitor.position().y + monitor.size().height as i32
+                - physical_size.height as i32
+                - 8;
+            x = x.clamp(min_x, max_x.max(min_x));
+            y = y.clamp(min_y, max_y.max(min_y));
+        }
+        window
+            .set_size(logical_size)
+            .map_err(|_| "Could not resize the quick-share shelf.".to_string())?;
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(|_| "Could not reposition the quick-share shelf.".to_string())
+    }
 }
 
 #[tauri::command]
@@ -97,9 +169,11 @@ async fn pick_share_files(app: tauri::AppHandle) -> Result<Vec<String>, String> 
         .file()
         .blocking_pick_files()
         .unwrap_or_default();
+    if selected.len() > 20 {
+        return Err("Choose up to 20 files per transfer.".into());
+    }
     selected
         .into_iter()
-        .take(20)
         .map(|selected| {
             selected
                 .into_path()
@@ -146,8 +220,10 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            platform::configure(app)?;
             if let Some(window) = app.get_webview_window("quick-share") {
                 quick_share::configure(&window);
+                #[cfg(not(target_os = "windows"))]
                 let _ = window.set_ignore_cursor_events(true);
             }
             // Some Linux desktop environments do not provide a tray host. In
@@ -207,11 +283,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             platform_info,
             start_window_drag,
+            snap_window,
             set_quick_share_expanded,
             quick_share::set_quick_share_open,
             share_send::begin_share_send,
             share_send::cancel_share_send,
             share_send::finish_share_send,
+            shared_transfers::shared_transfers,
+            shared_transfers::start_shared_transfer,
+            shared_transfers::update_shared_transfer,
             tray::set_share_send_progress,
             quick_share::focus_quick_share,
             pick_share_files,
@@ -219,6 +299,7 @@ pub fn run() {
             native::authenticate_sensitive_action,
             native::take_pending_share,
             tray::open_quick_share,
+            tray::open_connection_settings,
             tray::open_exchange_window,
             tray::set_quick_share_pointer_inside,
             tray::set_quick_share_pinned,

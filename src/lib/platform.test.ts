@@ -15,6 +15,9 @@ describe("platform detection", () => {
       tray: true,
       deviceName: "HomePlace Mac",
       platformVersion: "Unknown",
+      capabilities: [],
+      protocolMin: 1,
+      protocolMax: 1,
     });
   });
 });

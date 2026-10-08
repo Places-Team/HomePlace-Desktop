@@ -27,6 +27,44 @@ Next increments, in order:
 - Home Assistant control and cross-device automations need typed Link actions, per-action permissions, and an audit trail before either client presents them as working controls.
 - Validate Windows and Linux native builds and tray behavior on those operating systems; macOS checks cannot establish their parity.
 
+## Current implementation status
+
+- **Foundation:** the shared React/Tauri shell, locked JavaScript and Rust
+  dependencies, linting, tests and three-platform compile checks are in place.
+  Versioned Link schema fixtures, the final supported-OS table and the signing
+  model still need to be committed before Phase 0 is treated as closed.
+- **Pairing:** live server verification, protocol and clock checks, P-256 device
+  identity, approval polling, one-time credential storage, multiple profiles,
+  active-profile recovery, authenticated heartbeat presence, bounded reconnect,
+  revocation and local forgetting are implemented. Broader device-event coverage
+  remains.
+- **Windows:** the Fluent shell, custom native window frame, secure pairing,
+  profile recovery, heartbeat, notifications, autostart and notification-area
+  lifecycle are implemented. Quick Share uses a persistent Windows 11 companion
+  window, and Explorer exposes a per-user multi-file “Share with HomePlace”
+  action. The custom frame includes Snap Layouts, and active file sends surface
+  progress on the Windows taskbar. Resumable file batches and transfer progress
+  are shared with the current desktop application. CI can produce
+  unsigned MSI and NSIS installers for internal testing; signing is outstanding.
+  Quick Share combines repeated file selections, defers Explorer requests while
+  a transfer is active, restores minimized windows, and refreshes device presence
+  while visible. Closing its window during a transfer preserves the active send.
+  The native inbox retains requests if a send starts during an asynchronous
+  read, and serializes overlapping Explorer notifications. Repeated send clicks
+  are guarded synchronously. Cancelling a file picker preserves the draft;
+  selecting more than 20 files reports an error instead of silently truncating.
+  Window layout controls support keyboard navigation, Escape, outside-click
+  dismissal and Russian labels, including snapping from a maximized window.
+  Sidebar expansion preserves keyboard focus. Browser regressions cover these
+  interactions and Quick Share drafts, deferred requests and minimum-size themes;
+  native cross-device validation remains outstanding.
+- **macOS and Linux:** both remain in the shared build matrix. Their visual and
+  platform work can continue independently; shared protocol changes must keep
+  the same tests and capability rules on every platform.
+
+The interface shows **Connecting** until the first authenticated heartbeat and
+uses **Online** only after HomePlace has returned a valid heartbeat response.
+
 ## Phase 0 — contract and repository foundation
 
 - Scaffold Tauri 2, Rust, React, TypeScript and Vite.
@@ -174,6 +212,10 @@ application is missing and never expose context to another HomePlace user.
 
 ## Phase 7 — packaging and public beta
 
+Current progress: an isolated Windows workflow produces unsigned MSI and NSIS
+artifacts for internal testing. These are not release artifacts; signing,
+updates and the other platform packages remain outstanding.
+
 - Produce signed macOS dmg, Windows msi and Linux deb, rpm and AppImage builds.
 - Add opt-in signed update channels and rollback-safe migrations.
 - Test autostart, uninstall and credential cleanup.
@@ -213,6 +255,14 @@ these server contracts are required before the corresponding milestones ship:
 7. automation triggers and actions backed by the same command model.
 
 ## Release order
+
+Windows transfer polish: Quick Share and the main composer now share one native
+outgoing queue, progress, cancellation and session history (last 20 entries).
+Browser regression tests exercise both directions across two windows, and native
+tests reject concurrent senders and late progress after completion. Windows uses
+a persistent Quick Share surface and content scrolling below the window caption.
+Real paired-device and installed-shell validation remain release checks; browser
+tests mock the native API and do not demonstrate Windows-to-macOS delivery.
 
 macOS is the first polished visual target because it defines the glass design
 and menu bar experience. Windows and Linux remain buildable from Phase 0 and

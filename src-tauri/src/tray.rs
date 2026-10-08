@@ -95,7 +95,7 @@ pub fn install(app: &App) -> tauri::Result<()> {
                 button_state: MouseButtonState::Up,
                 ..
             } => {
-                remember_tray_rect(rect.clone());
+                remember_tray_rect(rect);
                 show_quick_share(tray.app_handle(), rect, true);
             }
             TrayIconEvent::DoubleClick {
@@ -222,11 +222,11 @@ fn quick_share_anchor<R: Runtime>(app: &AppHandle<R>) -> Option<Rect> {
         .tray_by_id(TRAY_ID)
         .and_then(|tray| tray.rect().ok().flatten())
     {
-        remember_tray_rect(rect.clone());
+        remember_tray_rect(rect);
         return Some(rect);
     }
     if let Ok(stored) = LAST_TRAY_RECT.lock()
-        && let Some(rect) = stored.clone()
+        && let Some(rect) = *stored
     {
         return Some(rect);
     }
@@ -240,6 +240,7 @@ fn quick_share_anchor<R: Runtime>(app: &AppHandle<R>) -> Option<Rect> {
     })
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn show_quick_share_for_drag<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window("quick-share") else {
         return;
@@ -260,26 +261,51 @@ pub fn show_quick_share_for_drag<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn finish_quick_share_drag<R: Runtime>(app: &AppHandle<R>) {
     QUICK_SHARE_POINTER_INSIDE.store(false, Ordering::Relaxed);
     let _ = app.emit("quick-share-drag-active", false);
     crate::quick_share::finish_drag(app);
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn quick_share_retained() -> bool {
     QUICK_SHARE_PINNED.load(Ordering::Relaxed)
 }
 
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn quick_share_generation() -> u64 {
     QUICK_SHARE_PRESENTATION.load(Ordering::SeqCst)
 }
 
 #[tauri::command]
 pub fn set_share_send_progress(app: AppHandle, percent: Option<u8>) -> Result<(), String> {
-    let Some(tray) = app.tray_by_id(TRAY_ID) else { return Ok(()); };
-    let Some(base) = app.default_window_icon() else { return Ok(()); };
+    let progress = tauri::window::ProgressBarState {
+        status: Some(if percent.is_some() {
+            tauri::window::ProgressBarStatus::Normal
+        } else {
+            tauri::window::ProgressBarStatus::None
+        }),
+        progress: percent.map(u64::from),
+    };
+    for label in ["main", "quick-share"] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.set_progress_bar(tauri::window::ProgressBarState {
+                status: progress.status,
+                progress: progress.progress,
+            });
+        }
+    }
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return Ok(());
+    };
+    let Some(base) = app.default_window_icon() else {
+        return Ok(());
+    };
     if let Some(percent) = percent {
-        if percent > 100 { return Err("Invalid transfer progress.".into()); }
+        if percent > 100 {
+            return Err("Invalid transfer progress.".into());
+        }
         let mut pixels = vec![0_u8; 64 * 64 * 4];
         for y in 0..64_usize {
             for x in 0..64_usize {
@@ -288,11 +314,20 @@ pub fn set_share_send_progress(app: AppHandle, percent: Option<u8>) -> Result<()
                 let dy = y as f64 - 31.5;
                 let distance = (dx * dx + dy * dy).sqrt();
                 if (27.0..=31.0).contains(&distance) {
-                    let angle = (dy.atan2(dx) + std::f64::consts::FRAC_PI_2).rem_euclid(std::f64::consts::TAU);
+                    let angle = (dy.atan2(dx) + std::f64::consts::FRAC_PI_2)
+                        .rem_euclid(std::f64::consts::TAU);
                     let filled = angle / std::f64::consts::TAU <= f64::from(percent) / 100.0;
-                    pixels[offset..offset + 4].copy_from_slice(if filled { &[237, 155, 83, 255] } else { &[140, 140, 140, 150] });
+                    pixels[offset..offset + 4].copy_from_slice(if filled {
+                        &[237, 155, 83, 255]
+                    } else {
+                        &[140, 140, 140, 150]
+                    });
                 }
-                if (14..50).contains(&x) && (14..50).contains(&y) && base.width() > 0 && base.height() > 0 {
+                if (14..50).contains(&x)
+                    && (14..50).contains(&y)
+                    && base.width() > 0
+                    && base.height() > 0
+                {
                     let sx = (x - 14) * base.width() as usize / 36;
                     let sy = (y - 14) * base.height() as usize / 36;
                     let source = (sy * base.width() as usize + sx) * 4;
@@ -300,10 +335,15 @@ pub fn set_share_send_progress(app: AppHandle, percent: Option<u8>) -> Result<()
                 }
             }
         }
-        tray.set_icon(Some(tauri::image::Image::new_owned(pixels, 64, 64))).map_err(|_| "Could not update tray progress.")?;
-        tray.set_tooltip(Some(format!("HomePlace Desktop · Sending files · {percent}%"))).map_err(|_| "Could not update tray tooltip.")?;
+        tray.set_icon(Some(tauri::image::Image::new_owned(pixels, 64, 64)))
+            .map_err(|_| "Could not update tray progress.")?;
+        tray.set_tooltip(Some(format!(
+            "HomePlace Desktop · Sending files · {percent}%"
+        )))
+        .map_err(|_| "Could not update tray tooltip.")?;
     } else {
-        tray.set_icon(Some(base.clone())).map_err(|_| "Could not restore tray icon.")?;
+        tray.set_icon(Some(base.clone()))
+            .map_err(|_| "Could not restore tray icon.")?;
         let _ = tray.set_tooltip(Some("HomePlace Desktop"));
     }
     Ok(())
@@ -319,8 +359,13 @@ pub fn show_quick_share_from_extension<R: Runtime>(app: &AppHandle<R>) {
 
 /// Incoming consent is a quiet tray hint, never a focus-stealing popup.
 pub fn show_quick_share_incoming<R: Runtime>(app: &AppHandle<R>) {
-    let Some(window) = app.get_webview_window("quick-share") else { return; };
-    if window.is_visible().unwrap_or(false) { return; }
+    let Some(window) = app.get_webview_window("quick-share") else {
+        return;
+    };
+    if window.is_visible().unwrap_or(false) {
+        return;
+    }
+    #[cfg(not(target_os = "windows"))]
     if !QUICK_SHARE_PINNED.load(Ordering::Relaxed) {
         let _ = window.set_size(tauri::LogicalSize::new(104.0, 56.0));
     }
@@ -410,7 +455,9 @@ pub fn hide_main_window<R: Runtime>(window: &tauri::Window<R>) {
     // panel and must not restore the Dock icon when it receives files.
     if window.hide().is_ok() {
         #[cfg(target_os = "macos")]
-        let _ = window.app_handle().set_activation_policy(main_window_policy(false));
+        let _ = window
+            .app_handle()
+            .set_activation_policy(main_window_policy(false));
         notify_window_hidden(window.app_handle());
     }
 }
@@ -426,12 +473,27 @@ pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     let _ = window.set_focus();
 }
 
+#[tauri::command]
+pub fn open_connection_settings(app: AppHandle) {
+    show_main_window(&app);
+    let _ = app.emit("navigate-section", "settings");
+}
+
 fn show_quick_share<R: Runtime>(app: &AppHandle<R>, tray_rect: Rect, focus: bool) {
     QUICK_SHARE_PRESENTATION.fetch_add(1, Ordering::SeqCst);
     let Some(window) = app.get_webview_window("quick-share") else {
         return;
     };
     crate::quick_share::prepare_show(app);
+    #[cfg(target_os = "windows")]
+    if window.is_visible().unwrap_or(false) {
+        let _ = window.unminimize();
+        if focus {
+            let _ = window.set_focus();
+        }
+        let _ = app.emit("quick-share-opened", true);
+        return;
+    }
     let scale_factor = window.scale_factor().unwrap_or(1.0);
     let tray_position = tray_rect.position.to_physical::<f64>(scale_factor);
     let tray_size = tray_rect.size.to_physical::<f64>(scale_factor);
@@ -466,6 +528,7 @@ fn show_quick_share<R: Runtime>(app: &AppHandle<R>, tray_rect: Rect, focus: bool
     }
 
     let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+    let _ = window.unminimize();
     let _ = window.show();
     if focus {
         let _ = window.set_focus();
@@ -542,8 +605,14 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn hidden_main_window_uses_tray_only_activation() {
-        assert!(matches!(main_window_policy(false), tauri::ActivationPolicy::Accessory));
-        assert!(matches!(main_window_policy(true), tauri::ActivationPolicy::Regular));
+        assert!(matches!(
+            main_window_policy(false),
+            tauri::ActivationPolicy::Accessory
+        ));
+        assert!(matches!(
+            main_window_policy(true),
+            tauri::ActivationPolicy::Regular
+        ));
     }
 
     #[test]

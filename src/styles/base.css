@@ -19,6 +19,7 @@ html, body, #root { min-height: 100%; margin: 0; }
 button, input { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; opacity: 0.55; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 body {
   min-width: 320px;
@@ -52,7 +53,7 @@ body {
 .ambient-one { top: 4%; left: 8%; background: #4a71e8; }
 .ambient-two { right: 3%; bottom: 2%; background: #7147c7; }
 
-.titlebar { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; }
+.titlebar { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; user-select: none; }
 .titlebar h1 { margin: 1px 0 0; font-size: 18px; letter-spacing: -0.02em; }
 .brand-mark {
   display: grid;
@@ -74,6 +75,48 @@ body {
   color: var(--muted);
   font-size: 12px;
 }
+.window-controls { position: fixed; top: 0; right: 0; z-index: 100; display: flex; height: 40px; margin: 0; }
+.window-control {
+  display: grid;
+  width: 46px;
+  height: 40px;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: rgba(246, 247, 251, .78);
+  box-shadow: none;
+}
+.window-control-wrap { position: relative; height: 40px; }
+.window-control svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1; shape-rendering: crispEdges; }
+.window-control:hover { background: rgba(255,255,255,.1); color: #fff; }
+.window-control:active { background: rgba(255,255,255,.06); }
+.window-close:hover { background: #c42b1c; color: #fff; }
+.window-close:active { background: #a82518; }
+.snap-layouts {
+  position: absolute;
+  top: 44px;
+  right: -46px;
+  display: grid;
+  width: 196px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 10px;
+  background: rgba(28, 31, 38, .98);
+  padding: 8px;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, .38);
+}
+.snap-layouts > button { display: grid; height: 44px; place-items: center; border: 0; border-radius: 6px; background: transparent; padding: 6px; color: #8aa8ff; }
+.snap-layouts > button:hover, .snap-layouts > button:focus-visible { outline: none; background: rgba(138, 168, 255, .14); }
+.snap-preview { display: grid; width: 34px; height: 24px; grid-template: repeat(2, 1fr) / repeat(2, 1fr); gap: 2px; }
+.snap-preview i { border: 1px solid rgba(220, 226, 240, .34); border-radius: 2px; background: rgba(255, 255, 255, .035); }
+.snap-preview.left i:nth-child(1), .snap-preview.left i:nth-child(3),
+.snap-preview.right i:nth-child(2), .snap-preview.right i:nth-child(4),
+.snap-preview.top-left i:nth-child(1), .snap-preview.top-right i:nth-child(2),
+.snap-preview.bottom-left i:nth-child(3), .snap-preview.bottom-right i:nth-child(4),
+.snap-preview.maximize i { border-color: currentColor; background: rgba(138, 168, 255, .24); }
 .eyebrow { margin: 0; color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: .12em; text-transform: uppercase; }
 
 .glass-card {
@@ -236,8 +279,13 @@ body {
 .detail-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 footer { display: flex; justify-content: space-between; gap: 20px; padding: 22px 5px 0; color: rgba(235,239,248,.34); font-size: 10px; }
 
-html[data-platform="windows"] { --surface: rgba(26, 31, 41, 0.78); --accent: #70b7ff; --accent-strong: #afd8ff; }
+html[data-platform="windows"] { border: 1px solid rgba(255,255,255,.14); font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; --surface: rgba(26, 31, 41, 0.78); --accent: #70b7ff; --accent-strong: #afd8ff; }
+html[data-platform="windows"][data-maximized="true"] { border-color: transparent; }
+html[data-platform="windows"] body { min-height: calc(100vh - 2px); }
 html[data-platform="windows"] .glass-card { border-radius: 10px; backdrop-filter: blur(22px); }
+html[data-platform="windows"] .field-row input,
+html[data-platform="windows"] .field-row button,
+html[data-platform="windows"] .connection-message { border-radius: 4px; }
 html[data-platform="linux"] { --surface: rgba(26, 29, 36, 0.94); --accent: #8bc5aa; --accent-strong: #b6e5cf; }
 html[data-platform="linux"] .glass-card { backdrop-filter: none; }
 
@@ -251,6 +299,7 @@ html[data-platform="linux"] .glass-card { backdrop-filter: none; }
   .profile-list > button { min-width: 138px; }
   .progress li { font-size: 0; }
   footer { flex-direction: column; gap: 5px; }
+  .window-controls { top: 0; right: 0; }
 }
 
 @media (prefers-reduced-transparency: reduce) {
@@ -261,4 +310,15 @@ html[data-platform="linux"] .glass-card { backdrop-filter: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}
+
+@media (forced-colors: active) {
+  :root { --surface: Canvas; --muted: CanvasText; --accent: Highlight; --accent-strong: Highlight; }
+  body { background: Canvas; color: CanvasText; }
+  .ambient { display: none; }
+  .glass-card, .field-row input, .field-row button, .connection-message, .approval-card { border: 1px solid CanvasText; background: Canvas; color: CanvasText; box-shadow: none; backdrop-filter: none; }
+  html[data-platform="windows"] { border-color: CanvasText; }
+  .window-control { border: 0; background: Canvas; color: CanvasText; }
+  .window-control:hover, .window-close:hover { background: Highlight; color: HighlightText; }
+  .status-dot { background: Highlight; box-shadow: none; }
 }

@@ -259,13 +259,12 @@ fn validate_batch(batch: &BatchInfo) -> Result<(), String> {
         {
             return Err("Invalid batch file manifest.".into());
         }
-        if let Some(url) = &file.download_url {
-            if !url
+        if let Some(url) = &file.download_url
+            && !url
                 .strip_prefix("/api/link/mobile/share/file/")
                 .is_some_and(safe_id)
-            {
-                return Err("Invalid batch download address.".into());
-            }
+        {
+            return Err("Invalid batch download address.".into());
         }
     }
     Ok(())
@@ -323,7 +322,11 @@ pub async fn send_share_batch(
     operation_id: Option<String>,
 ) -> Result<BatchInfo, String> {
     let work = send_share_batch_impl(app, target_device_id, file_paths);
-    if let Some(id) = operation_id { crate::share_send::run(&id, work).await } else { work.await }
+    if let Some(id) = operation_id {
+        crate::share_send::run(&id, work).await
+    } else {
+        work.await
+    }
 }
 
 async fn send_share_batch_impl(
@@ -548,7 +551,7 @@ async fn upload_and_publish(
             }
             offset = acknowledged.offset;
             let _ = app.emit(
-                "link-file-batch-progress",
+                "link-file-batch-send-progress",
                 BatchTransferProgress {
                     batch_id: id.clone(),
                     file_name: manifest.filename.clone(),
@@ -872,6 +875,7 @@ fn find_verified_path(path: &Path, size: u64, sha256: &str) -> bool {
     format!("{:x}", hasher.finalize()) == sha256
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn download_one(
     app: &AppHandle,
     base: &url::Url,
@@ -1061,10 +1065,7 @@ fn find_verified_existing(
         };
         let mut hasher = Sha256::new();
         let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            let Ok(read) = file.read(&mut buffer) else {
-                break;
-            };
+        while let Ok(read) = file.read(&mut buffer) {
             if read == 0 {
                 break;
             }

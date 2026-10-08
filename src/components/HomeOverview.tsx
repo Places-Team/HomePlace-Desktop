@@ -55,7 +55,7 @@ function formatSpeed(bytes: number): string {
 export function HomeOverview({ serverId, language, onNavigate, requestedPlantId, onPlantRequestHandled }: {
   serverId: string;
   language: Language;
-  onNavigate: (section: "media" | "monitoring" | "notifications") => void;
+  onNavigate: (section: "media" | "monitoring" | "notifications" | "settings") => void;
   requestedPlantId?: string | null;
   onPlantRequestHandled?: () => void;
 }) {
@@ -209,16 +209,17 @@ export function HomeOverview({ serverId, language, onNavigate, requestedPlantId,
   const problemCount = (overview?.monitoring.offline ?? 0) + (overview?.monitoring.containers.problems ?? 0);
   const today = new Date(now);
   const duePlants = plants.filter((plant) => daysUntilWater(plant, today) <= 0).length;
+  const needsApproval = Boolean(error && (error.includes("not approved") || error.includes("Pair the device again")));
 
   return <div className="home-overview">
     <div className="home-overview-heading">
-      <div><p className="eyebrow">{ru ? "СЕГОДНЯ" : "TODAY"}</p><h2>{ru ? "Что требует внимания" : "What needs attention"}</h2></div>
+      <div><h2>{ru ? "Сегодня" : "Today"}</h2></div>
       <button type="button" onClick={() => void refresh()} disabled={loading} aria-label={ru ? "Обновить обзор" : "Refresh overview"}><Icon name="refresh" size={17} />{ru ? "Обновить" : "Refresh"}</button>
     </div>
-    {error && <p className="home-overview-error" role="status">{error} <button type="button" onClick={() => void refresh()}>{ru ? "Повторить" : "Retry"}</button></p>}
+    {error && <p className="home-overview-error" role="status">{error} <button type="button" onClick={needsApproval ? () => onNavigate("settings") : () => void refresh()}>{needsApproval ? (ru ? "Обновить разрешения" : "Renew permissions") : (ru ? "Повторить" : "Retry")}</button></p>}
     <div className="home-overview-grid">
       <section className="home-overview-service">
-        <div className="home-overview-section-head"><span><Icon name="monitoring" size={20} /></span><div><h3>{ru ? "Сервер и сервисы" : "Server and services"}</h3><p>{ru ? "Состояние по последней проверке" : "Latest server check"}</p></div></div>
+        <div className="home-overview-section-head"><span><Icon name="monitoring" size={20} /></span><div><h3>{ru ? "Сервер и сервисы" : "Server and services"}</h3></div></div>
         {overview ? <>
           <div className="home-overview-numbers"><div><strong>{overview.monitoring.online}<small> / {overview.monitoring.total}</small></strong><span>{ru ? "сервисов доступны" : "services online"}</span></div><div><strong>{overview.monitoring.containers.running}<small> / {overview.monitoring.containers.total}</small></strong><span>{ru ? "контейнеров работают" : "containers running"}</span></div></div>
           <button type="button" className={problemCount > 0 ? "home-overview-alert" : "home-overview-clear"} onClick={() => onNavigate("monitoring")}><span>{problemCount > 0 ? (ru ? `${problemCount} требуют проверки` : `${problemCount} need attention`) : (ru ? "Проблем не обнаружено" : "No reported issues")}</span><Icon name="open" size={16} /></button>

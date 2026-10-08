@@ -92,3 +92,28 @@ html[data-theme="dark"] .theme-choices > button.active { background: color-mix(i
 .workspace-media-view span, .workspace-result-count { margin-left: auto; color: var(--muted); font-size: 12px; }
 .workspace-media-view button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .theme-choices > button { transition: none; } }
+.quick-share-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.quick-share-tools > button { display: inline-flex; min-height: 36px; align-items: center; gap: 7px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 10px; background: var(--panel-soft); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.quick-share-tools > button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.quick-share-tools > button:disabled { opacity: .5; cursor: default; }
+html[data-platform="windows"] .window-drag-region,
+html[data-platform="windows"] .desktop-shell.sidebar-expanded .window-drag-region { left: 0; }
+html[data-platform="windows"] .window-drag-region::before { content: "HomePlace Desktop"; display: flex; height: 40px; align-items: center; padding-left: 16px; color: var(--muted); font-size: 12px; }
+html[data-platform="windows"] .app-content .titlebar { padding-right: 0; }
+.window-control-wrap::after { position: absolute; top: 100%; right: 0; width: 46px; height: 10px; content: ""; }
+html[data-theme="light"] .window-control { color: var(--text); }
+html[data-theme="light"] .window-control:hover { background: rgba(0, 0, 0, .07); }
+html[data-theme="light"] .window-close:hover { background: #c42b1c; color: white; }
+.snap-layouts { border-color: var(--line-strong); background: var(--panel); color: var(--text); }
+.snap-layouts > button { color: var(--accent-strong); }
+.snap-layouts > button:hover, .snap-layouts > button:focus-visible { background: var(--accent-soft); }
+.snap-layouts > button:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -2px; }
+html[data-theme="light"] .snap-preview i { border-color: var(--muted); }
+.tray-share-root.persistent .quick-share-copy b,
+.tray-share-root.persistent .quick-share-payload b,
+.tray-share-root.persistent .quick-share-targets b { font-size: 13px; }
+.tray-share-root.persistent .quick-share-copy small,
+.tray-share-root.persistent .quick-share-payload small,
+.tray-share-root.persistent .quick-share-targets small { font-size: 12px; line-height: 1.4; }
+.tray-share-root.persistent .quick-share-panel textarea { font-size: 14px; }
+.tray-share-root.persistent .quick-share-targets > button { min-height: 56px; }

@@ -45,6 +45,8 @@ const MAX_RETRY_SECONDS: u64 = 5 * 60;
 const CLIPBOARD_POLL_MILLISECONDS: u64 = 900;
 const MAX_CLIPBOARD_HISTORY_ITEMS: usize = 50;
 const CLIPBOARD_HISTORY_EVENT: &str = "clipboard-history-changed";
+const CLIPBOARD_SYNC_ERROR_EVENT: &str = "clipboard-sync-error";
+const CLIPBOARD_SYNC_RESTORED_EVENT: &str = "clipboard-sync-restored";
 
 pub struct HeartbeatService {
     wake: mpsc::Sender<()>,
@@ -984,6 +986,9 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
             };
             match relay_clipboard_update(&profile, credential.as_str(), &text).await {
                 Ok(()) => {
+                    if last_failure.is_some() {
+                        let _ = clipboard_app.emit(CLIPBOARD_SYNC_RESTORED_EVENT, ());
+                    }
                     last_failure = None;
                     if clipboard_app
                         .clipboard()
@@ -996,11 +1001,14 @@ pub fn start_heartbeat_service(app: AppHandle) -> HeartbeatService {
                     }
                     let _ = record_clipboard_history(&clipboard_app, &text, "sent");
                 }
-                Err(_) => {
+                Err(message) => {
                     let attempts = last_failure
                         .as_ref()
                         .filter(|(failed_digest, _, _)| failed_digest == &digest)
                         .map_or(1, |(_, _, attempts)| attempts.saturating_add(1));
+                    if attempts == 1 {
+                        let _ = clipboard_app.emit(CLIPBOARD_SYNC_ERROR_EVENT, message);
+                    }
                     last_failure = Some((digest, Instant::now(), attempts));
                 }
             }
@@ -2053,12 +2061,11 @@ pub async fn link_plant_photo(
     let endpoint = plant_photo_endpoint(&profile, &client_id)?;
     let cache_path = plant_photo_cache_path(&app, &profile, &client_id, &version)?;
     if let Ok(metadata) = fs::metadata(&cache_path) {
-        if metadata.len() <= MAX_PLANT_PHOTO_BYTES as u64 {
-            if let Ok(bytes) = fs::read(&cache_path) {
-                if let Ok(uri) = plant_photo_data_uri(&bytes) {
-                    return Ok(uri);
-                }
-            }
+        if metadata.len() <= MAX_PLANT_PHOTO_BYTES as u64
+            && let Ok(bytes) = fs::read(&cache_path)
+            && let Ok(uri) = plant_photo_data_uri(&bytes)
+        {
+            return Ok(uri);
         }
         let _ = fs::remove_file(&cache_path);
     }
@@ -2866,6 +2873,20 @@ pub async fn send_share_text(
     target_device_id: String,
     kind: String,
     value: String,
+    operation_id: Option<String>,
+) -> Result<(), String> {
+    let work = send_share_text_impl(target_device_id, kind, value);
+    if let Some(id) = operation_id {
+        crate::share_send::run(&id, work).await
+    } else {
+        work.await
+    }
+}
+
+async fn send_share_text_impl(
+    target_device_id: String,
+    kind: String,
+    value: String,
 ) -> Result<(), String> {
     if !safe_identifier(&target_device_id) {
         return Err("The target device is invalid.".into());
@@ -2915,7 +2936,11 @@ pub async fn send_share_file(
     operation_id: Option<String>,
 ) -> Result<(), String> {
     let work = send_share_file_impl(app, target_device_id, file_path, transfer_id);
-    if let Some(id) = operation_id { crate::share_send::run(&id, work).await } else { work.await }
+    if let Some(id) = operation_id {
+        crate::share_send::run(&id, work).await
+    } else {
+        work.await
+    }
 }
 
 async fn send_share_file_impl(
@@ -3037,6 +3062,9 @@ pub fn set_clipboard_sync(
         .map_err(|_| "Could not update clipboard synchronisation state.".to_string())? =
         Some(clipboard_digest(&current));
     service.wake();
+    if !enabled {
+        let _ = app.emit(CLIPBOARD_SYNC_RESTORED_EVENT, ());
+    }
     Ok(ClipboardSyncStatus { enabled })
 }
 
@@ -3162,7 +3190,11 @@ async fn relay_clipboard_update(
         .send()
         .await
         .map_err(|error| connection_error(&error))?;
-    ensure_success(&response, "clipboard relay")
+    match response.status().as_u16() {
+        401 => Err("HomePlace rejected this device credential. Pair the device again.".into()),
+        403 => Err("Clipboard sharing is not approved for this device. Pair it again and approve clipboard access in HomePlace.".into()),
+        _ => ensure_success(&response, "clipboard relay"),
+    }
 }
 
 fn heartbeat_retry_delay(failures: u32) -> Duration {
@@ -3401,7 +3433,10 @@ fn sync_share_offers(
                 .iter()
                 .any(|offer| !matches!(offer.content, ShareContent::File(_))))
     {
-        if new_offers.iter().any(|offer| matches!(offer.content, ShareContent::File(_))) {
+        if new_offers
+            .iter()
+            .any(|offer| matches!(offer.content, ShareContent::File(_)))
+        {
             crate::tray::show_quick_share_incoming(app);
         } else {
             crate::tray::show_quick_share_from_extension(app);
@@ -3688,7 +3723,12 @@ pub async fn resolve_file_offers(
         if let (Some(directory), ShareContent::File(file)) = (&directory, &offer.content) {
             save_received_file(&app, &profile, credential.as_str(), file, Some(directory)).await?;
         }
-        heartbeat_request(&profile, credential.as_str(), &[offer.id.clone()]).await?;
+        heartbeat_request(
+            &profile,
+            credential.as_str(),
+            std::slice::from_ref(&offer.id),
+        )
+        .await?;
         service
             .offers
             .lock()
@@ -3784,10 +3824,15 @@ async fn save_received_file(
             .map_err(|_| "The temporary destination file could not be created.".to_string())?;
         let mut actual_size = 0usize;
         let mut last_progress = std::time::Instant::now();
-        let _ = app.emit("link-file-receive-progress", FileTransferProgress {
-            transfer_id: offer.transfer_id.clone(), file_name: offer.filename.clone(),
-            transferred_bytes: 0, total_bytes: offer.size as u64,
-        });
+        let _ = app.emit(
+            "link-file-receive-progress",
+            FileTransferProgress {
+                transfer_id: offer.transfer_id.clone(),
+                file_name: offer.filename.clone(),
+                transferred_bytes: 0,
+                total_bytes: offer.size as u64,
+            },
+        );
         let mut hasher = Sha256::new();
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
@@ -3801,11 +3846,18 @@ async fn save_received_file(
             file.write_all(&chunk)
                 .await
                 .map_err(|_| "The shared file could not be saved.".to_string())?;
-            if last_progress.elapsed() >= std::time::Duration::from_millis(200) || actual_size == offer.size {
-                let _ = app.emit("link-file-receive-progress", FileTransferProgress {
-                    transfer_id: offer.transfer_id.clone(), file_name: offer.filename.clone(),
-                    transferred_bytes: actual_size as u64, total_bytes: offer.size as u64,
-                });
+            if last_progress.elapsed() >= std::time::Duration::from_millis(200)
+                || actual_size == offer.size
+            {
+                let _ = app.emit(
+                    "link-file-receive-progress",
+                    FileTransferProgress {
+                        transfer_id: offer.transfer_id.clone(),
+                        file_name: offer.filename.clone(),
+                        transferred_bytes: actual_size as u64,
+                        total_bytes: offer.size as u64,
+                    },
+                );
                 last_progress = std::time::Instant::now();
             }
         }
